@@ -1,0 +1,116 @@
+{% load i18n %}
+{% load appearance_tags %}
+{% load common_tags %}
+{% load navigation_tags %}
+{% spaceless %}
+    <nav class="navbar navbar-default navbar-fixed-top">
+        <div class="container-fluid">
+            <div class="navbar-header">
+                <button aria-expanded="false" aria-controls="navbar" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#navbar" type="button">
+                    <span class="sr-only">{% trans 'Toggle navigation' %}</span>
+                    <span class="icon-bar"></span>
+                    <span class="icon-bar"></span>
+                    <span class="icon-bar"></span>
+                </button>
+                <div id="ajax-spinner" style="display: none;"></div>
+                <a class="navbar-brand" href="{% url home_view %}"><span class="icon-mayan-edms-logo"></span> INSIDDEN</a>
+            </div>
+            <div class="collapse navbar-collapse" id="navbar">
+                <ul class="nav navbar-nav navbar-right">
+                    {% navigation_resolve_menu name='topbar' as topbar_menus_results %}
+                    {% for tobpar_menu_result in topbar_menus_results %}
+                        {% for link_group in tobpar_menu_result.link_groups %}
+                            {% for link in link_group.links %}
+                                {% with 'true' as as_li %}
+                                {% with 'true' as hide_active_anchor %}
+                                {% with 'active' as li_class_active %}
+                                {% with 'first' as li_class_first %}
+                                {% with ' ' as link_classes %}
+                                    {% include 'navigation/generic_subnavigation.html' %}
+                                {% endwith %}
+                                {% endwith %}
+                                {% endwith %}
+                                {% endwith %}
+                                {% endwith %}
+                            {% endfor %}
+                        {% endfor %}
+                    {% endfor %}
+
+                    {% if request.user.is_authenticated %}
+                    <li id="download-indicator" style="display:none;">
+                        <a href="/storage/downloads/" title="{% trans 'Downloads' %}" style="padding:15px 12px; color:#5cb85c;">
+                            <span class="fa fa-download" style="font-size:16px;"></span>
+                            <span id="download-count" style="font-size:11px; font-weight:bold;"></span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="/storage/downloads/" title="{% trans 'Downloads' %}" style="padding:15px 12px;">
+                            <span class="fa fa-download" style="font-size:16px;"></span>
+                        </a>
+                    </li>
+                    {% endif %}
+
+                </ul>
+                {% appearance_app_templates template_name='topbar' %}
+            </div>
+        </div>
+    </nav>
+{% endspaceless %}
+
+{% if request.user.is_authenticated %}
+<script>
+(function() {
+    var CHECK_INTERVAL = 5000;
+    var STORAGE_KEY = 'mayan_last_download_id';
+
+    function getLastSeenId() {
+        try { return parseInt(localStorage.getItem(STORAGE_KEY) || '0'); }
+        catch(e) { return 0; }
+    }
+
+    function setLastSeenId(id) {
+        try { localStorage.setItem(STORAGE_KEY, id); }
+        catch(e) {}
+    }
+
+    function checkDownloads() {
+        fetch('/api/v4/downloads/', {credentials: 'same-origin'})
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var results = data.results || [];
+            var count = data.count || 0;
+
+            if (count > 0) {
+                // Показуємо іконку з лічильником
+                document.getElementById('download-indicator').style.display = 'block';
+                document.getElementById('download-count').textContent = count;
+
+                // Знаходимо найбільший ID в списку
+                var maxId = 0;
+                for (var i = 0; i < results.length; i++) {
+                    if (results[i].id > maxId) maxId = results[i].id;
+                }
+
+                var lastSeenId = getLastSeenId();
+
+                // Відкриваємо вкладку тільки якщо є НОВИЙ файл якого ще не бачили
+                if (maxId > lastSeenId) {
+                    setLastSeenId(maxId);
+                    // Відкриваємо пряме посилання на завантаження останнього файлу
+                    window.open(results[0].download_url, '_blank');
+                }
+            } else {
+                document.getElementById('download-indicator').style.display = 'none';
+            }
+        })
+        .catch(function() {});
+    }
+
+    setTimeout(function() {
+        checkDownloads();
+        setInterval(checkDownloads, CHECK_INTERVAL);
+    }, 2000);
+})();
+</script>
+{% endif %}
+

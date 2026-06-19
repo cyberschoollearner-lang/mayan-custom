@@ -1,0 +1,52 @@
+{% load i18n %}
+{% load appearance_tags %}
+{% load common_tags %}
+{% load navigation_tags %}
+{% spaceless %}
+    <nav class="navbar navbar-default navbar-fixed-top">
+        <div class="container-fluid">
+            <div class="navbar-header">
+                <button aria-expanded="false" aria-controls="navbar" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#navbar" type="button">
+                    <span class="sr-only">{% trans 'Toggle navigation' %}</span>
+                    <span class="icon-bar"></span>
+                    <span class="icon-bar"></span>
+                    <span class="icon-bar"></span>
+                </button>
+                <div id="ajax-spinner" style="display: none;"></div>
+                <a class="navbar-brand" href="{% url home_view %}"><span class="icon-mayan-edms-logo"></span> INSIDDEN</a>
+            </div>
+            <div class="collapse navbar-collapse" id="navbar">
+                <ul class="nav navbar-nav navbar-right">
+                    {% navigation_resolve_menu name='topbar' as topbar_menus_results %}
+                    {% for tobpar_menu_result in topbar_menus_results %}
+                        {% for link_group in tobpar_menu_result.link_groups %}
+                            {% for link in link_group.links %}
+                                {% with 'true' as as_li %}
+                                {% with 'true' as hide_active_anchor %}
+                                {% with 'active' as li_class_active %}
+                                {% with 'first' as li_class_first %}
+                                {% with ' ' as link_classes %}
+                                    {% include 'navigation/generic_subnavigation.html' %}
+                                {% endwith %}
+                                {% endwith %}
+                                {% endwith %}
+                                {% endwith %}
+                                {% endwith %}
+                            {% endfor %}
+                        {% endfor %}
+                    {% endfor %}
+
+                    {% if request.user.is_authenticated %}
+                    <li>
+                        <a href="/storage/downloads/" title="{% trans 'Downloads' %}" style="padding: 15px 12px;">
+                            <span class="fa fa-download" style="font-size:16px;"></span>
+                        </a>
+                    </li>
+                    {% endif %}
+
+                </ul>
+                {% appearance_app_templates template_name='topbar' %}
+            </div>
+        </div>
+    </nav>
+{% endspaceless %}
