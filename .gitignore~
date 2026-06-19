@@ -1,5 +1,0 @@
-.env
-.env-local
-*.pyc
-__pycache__/
-*.sql.gz
