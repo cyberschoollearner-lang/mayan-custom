@@ -45,6 +45,7 @@ cp /mnt/cephfs/mayan/import_clinic.py       "$BACKUP_DIR/scripts/"
 cp /mnt/cephfs/mayan/sync_users_from_mysql.py "$BACKUP_DIR/scripts/" 2>/dev/null || true
 cp /opt/mayan/sync_clients.sh               "$BACKUP_DIR/scripts/" 2>/dev/null || true
 cp /opt/mayan/sync_clinic.sh                "$BACKUP_DIR/scripts/" 2>/dev/null || true
+cp /opt/mayan/rotate_cabinets.py	    "$BACKUP_DIR/scripts/" 2>/dev/null || true
 
 # 7. Медіа
 echo "--- Медіа ---"

@@ -2062,3 +2062,368 @@ docker restart mayan-app-1
 Файл: `/opt/mayan/custom/signals.py` — див. розділ [Custom Django додаток](#custom-django-додаток).
 
 
+---
+
+## Ротація файлів по роках (`rotate_cabinets.py`)
+
+Скрипт автоматично розподіляє документи по підкабінетах-роках і видаляє застарілі.
+
+### Логіка роботи
+
+```
+Кабінет 0101/
+  aaaa.txt        ← документ 2024 року → переміщуємо в 0101/2024/
+  bbbb.txt        ← документ 2026 року → не чіпаємо (поточний рік)
+  2022/           ← рік < MIN_YEAR → перейменовуємо в 2022_archive
+  2023/           ← активний
+  2024/           ← активний
+  2022_archive/   ← через місяць видаляємо
+```
+
+**Порядок обробки:**
+1. Спочатку клієнти `01000-09999` — видаляємо лінки
+2. Потім клініки `0100-0999` — видаляємо файли
+
+**Лінк** = документ клініки (`0101`) розшарений клієнту (`01001`). При видаленні спочатку прибирається лінк у клієнта, потім оригінал у клініки.
+
+### Налаштування
+
+```bash
+# Максимальний строк зберігання (років)
+export MAX_RETENTION_YEARS=5   # 2026-5=2021, видаляємо папки < 2021
+
+# Затримка перед видаленням архіву (днів)
+export ARCHIVE_DELETE_AFTER_DAYS=30
+```
+
+### `/mnt/cephfs/mayan/rotate_cabinets.py`
+
+```python
+#!/usr/bin/env python3
+"""
+rotate_cabinets.py — щорічна ротація файлів по кабінетах Mayan EDMS.
+
+Використання:
+  # Тест для одного кабінету
+  python rotate_cabinets.py --test --cabinet 0101
+
+  # Тест для конкретного року
+  python rotate_cabinets.py --test --cabinet 0101 --year 2025
+
+  # Повна ротація
+  python rotate_cabinets.py --run
+
+  # Видалення архівів (запускати через місяць після ротації)
+  python rotate_cabinets.py --cleanup
+
+  # Dry-run cleanup
+  python rotate_cabinets.py --cleanup --dry-run
+"""
+
+import os, sys, django, argparse
+from datetime import datetime, timedelta
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mayan.settings.production')
+django.setup()
+
+from django.utils import timezone
+from mayan.apps.cabinets.models import Cabinet
+from mayan.apps.documents.models import Document
+from mayan.apps.acls.models import AccessControlList
+from django.contrib.contenttypes.models import ContentType
+
+MAX_RETENTION_YEARS    = int(os.getenv('MAX_RETENTION_YEARS', '5'))
+ARCHIVE_DELETE_AFTER_DAYS = int(os.getenv('ARCHIVE_DELETE_AFTER_DAYS', '30'))
+
+CURRENT_YEAR = datetime.now().year
+MIN_YEAR     = CURRENT_YEAR - MAX_RETENTION_YEARS
+
+doc_ct = ContentType.objects.get_for_model(Document)
+
+counter = {'moved': 0, 'archived': 0, 'deleted_links': 0, 'deleted_docs': 0, 'errors': 0}
+
+
+def log(msg, dry_run=False):
+    prefix = '[DRY-RUN] ' if dry_run else ''
+    print(f'{prefix}{msg}', flush=True)
+
+
+def get_or_create_year_cabinet(parent_cabinet, year, dry_run=False):
+    existing = Cabinet.objects.filter(label=str(year), parent=parent_cabinet).first()
+    if existing:
+        return existing
+    if dry_run:
+        log(f'  Створив би кабінет {parent_cabinet.label}/{year}', dry_run)
+        return None
+    cab, created = Cabinet.objects.get_or_create(label=str(year), parent=parent_cabinet)
+    if created:
+        log(f'  [CREATE] Кабінет {parent_cabinet.label}/{year}')
+    return cab
+
+
+def move_document_to_year(document, from_cabinet, to_cabinet, dry_run=False):
+    if dry_run:
+        log(f'  [MOVE] {document.label} → {to_cabinet.label}', dry_run)
+        counter['moved'] += 1
+        return
+    try:
+        from_cabinet.documents.remove(document)
+        to_cabinet.documents.add(document)
+        counter['moved'] += 1
+        log(f'  [MOVE] {document.label} → {to_cabinet.label}')
+    except Exception as e:
+        counter['errors'] += 1
+        log(f'  [ERROR] move {document.label}: {e}')
+
+
+def is_link(document):
+    """Документ є лінком якщо належить кабінету клініки 0100-0999."""
+    return document.cabinets.filter(label__regex=r'^0[1-9][0-9]{2}$').exists()
+
+
+def remove_document_from_cabinet(document, cabinet, is_link_doc=False, dry_run=False):
+    if dry_run:
+        action = 'видалив би лінк' if is_link_doc else 'видалив би документ'
+        log(f'  [DELETE] {action}: {document.label} з {cabinet.label}', dry_run)
+        if is_link_doc:
+            counter['deleted_links'] += 1
+        else:
+            counter['deleted_docs'] += 1
+        return
+    try:
+        from mayan.apps.permissions.models import Role
+        role_label = f'role_{cabinet.label.split("/")[0]}'
+        try:
+            role = Role.objects.get(label=role_label)
+            AccessControlList.objects.filter(
+                content_type=doc_ct, object_id=document.pk, role=role
+            ).delete()
+        except Role.DoesNotExist:
+            pass
+
+        cabinet.documents.remove(document)
+
+        if is_link_doc:
+            counter['deleted_links'] += 1
+            log(f'  [DELETE LINK] {document.label} з {cabinet.label}')
+        else:
+            if document.cabinets.count() == 0:
+                document.delete()
+                log(f'  [DELETE DOC] {document.label} видалено фізично')
+            else:
+                log(f'  [DELETE DOC] {document.label} видалено з {cabinet.label}')
+            counter['deleted_docs'] += 1
+    except Exception as e:
+        counter['errors'] += 1
+        log(f'  [ERROR] delete {document.label}: {e}')
+
+
+def archive_old_cabinet(cabinet, dry_run=False):
+    if '_archive' in cabinet.label or not cabinet.label.isdigit():
+        return
+    if int(cabinet.label) >= MIN_YEAR:
+        return
+    new_label = f'{cabinet.label}_archive'
+    if Cabinet.objects.filter(label=new_label, parent=cabinet.parent).exists():
+        return
+    if dry_run:
+        log(f'  [ARCHIVE] {cabinet.label} → {new_label}', dry_run)
+        counter['archived'] += 1
+        return
+    try:
+        old_label = cabinet.label
+        cabinet.label = new_label
+        cabinet.description = f'archived:{datetime.now().isoformat()}'
+        cabinet.save()
+        counter['archived'] += 1
+        log(f'  [ARCHIVE] {old_label} → {new_label}')
+    except Exception as e:
+        counter['errors'] += 1
+        log(f'  [ERROR] archive: {e}')
+
+
+def process_cabinet(root_cabinet, dry_run=False):
+    log(f'\n=== Кабінет: {root_cabinet.label} ===')
+
+    # Переміщуємо файли з кореня в підпапки по роках
+    for document in root_cabinet.documents.all():
+        doc_year = document.datetime_created.year if document.datetime_created else CURRENT_YEAR
+        if doc_year == CURRENT_YEAR:
+            continue
+        year_cabinet = get_or_create_year_cabinet(root_cabinet, doc_year, dry_run)
+        if year_cabinet or dry_run:
+            move_document_to_year(document, root_cabinet, year_cabinet, dry_run)
+
+    # Архівуємо старі підкабінети
+    for sub in Cabinet.objects.filter(parent=root_cabinet):
+        if sub.label.isdigit():
+            archive_old_cabinet(sub, dry_run)
+
+    # Видаляємо документи зі старих підкабінетів
+    for sub in Cabinet.objects.filter(parent=root_cabinet, label__regex=r'^\d{4}$'):
+        if not sub.label.isdigit() or int(sub.label) >= MIN_YEAR:
+            continue
+        log(f'  Обробка: {sub.label} (< {MIN_YEAR})')
+        for document in sub.documents.all():
+            remove_document_from_cabinet(
+                document, sub,
+                is_link_doc=is_link(document),
+                dry_run=dry_run
+            )
+
+
+def cleanup_archives(dry_run=False):
+    log(f'\n=== Cleanup архівів (старші {ARCHIVE_DELETE_AFTER_DAYS} днів) ===')
+    cutoff = datetime.now() - timedelta(days=ARCHIVE_DELETE_AFTER_DAYS)
+
+    for cab in Cabinet.objects.filter(label__endswith='_archive'):
+        archived_date = None
+        if cab.description and cab.description.startswith('archived:'):
+            try:
+                archived_date = datetime.fromisoformat(cab.description.replace('archived:', ''))
+            except Exception:
+                pass
+
+        if not archived_date:
+            log(f'  [SKIP] {cab.label} — дата невідома')
+            continue
+
+        if archived_date > cutoff:
+            days_left = (archived_date + timedelta(days=ARCHIVE_DELETE_AFTER_DAYS) - datetime.now()).days
+            log(f'  [SKIP] {cab.label} — ще {days_left} днів')
+            continue
+
+        log(f'  [DELETE] {cab.label}')
+        if not dry_run:
+            try:
+                for document in cab.documents.all():
+                    remove_document_from_cabinet(document, cab, is_link_doc=is_link(document))
+                cab.delete()
+            except Exception as e:
+                log(f'  [ERROR] {e}')
+
+
+def get_cabinets_ordered():
+    """Спочатку клієнти 01000-09999, потім клініки 0100-0999."""
+    clients, clinics = [], []
+    for cab in Cabinet.objects.filter(parent=None).order_by('label'):
+        if not cab.label.isdigit():
+            continue
+        num = int(cab.label)
+        if 1000 <= num <= 9999 and len(cab.label) == 5:
+            clients.append(cab)
+        elif 100 <= num <= 999 and len(cab.label) == 4:
+            clinics.append(cab)
+    return clients + clinics
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--run',       action='store_true')
+    parser.add_argument('--test',      action='store_true')
+    parser.add_argument('--cleanup',   action='store_true')
+    parser.add_argument('--dry-run',   action='store_true')
+    parser.add_argument('--cabinet',   type=str)
+    parser.add_argument('--year',      type=int)
+    parser.add_argument('--retention', type=int)
+    args = parser.parse_args()
+
+    global MAX_RETENTION_YEARS, MIN_YEAR
+    if args.retention:
+        MAX_RETENTION_YEARS = args.retention
+        MIN_YEAR = CURRENT_YEAR - MAX_RETENTION_YEARS
+
+    dry_run = args.test or args.dry_run
+
+    print(f'Поточний рік: {CURRENT_YEAR} | Мін. рік: {MIN_YEAR} | '
+          f'Режим: {"DRY-RUN" if dry_run else "РЕАЛЬНИЙ"}')
+
+    if args.cleanup:
+        cleanup_archives(dry_run=dry_run)
+    elif args.run or args.test:
+        if args.cabinet:
+            cab = Cabinet.objects.filter(label=args.cabinet, parent=None).first()
+            if not cab:
+                print(f'[ERROR] Кабінет {args.cabinet} не знайдено')
+                sys.exit(1)
+            process_cabinet(cab, dry_run=dry_run)
+        else:
+            cabinets = get_cabinets_ordered()
+            print(f'Кабінетів: {len(cabinets)}')
+            for cab in cabinets:
+                process_cabinet(cab, dry_run=dry_run)
+    else:
+        parser.print_help()
+
+    print(f'\nРезультати: moved={counter["moved"]} | archived={counter["archived"]} | '
+          f'del_links={counter["deleted_links"]} | del_docs={counter["deleted_docs"]} | '
+          f'errors={counter["errors"]}')
+
+
+main()
+```
+
+### Деплой
+
+```bash
+cp /mnt/user-data/outputs/rotate_cabinets.py /mnt/cephfs/mayan/
+docker cp /mnt/cephfs/mayan/rotate_cabinets.py mayan-app-1:/var/lib/mayan/
+```
+
+### Використання
+
+```bash
+# Тест на одному кабінеті
+docker exec mayan-app-1 /opt/mayan-edms/bin/python \
+  /var/lib/mayan/rotate_cabinets.py --test --cabinet 0102
+
+# Тест з іншим строком зберігання
+docker exec mayan-app-1 /opt/mayan-edms/bin/python \
+  /var/lib/mayan/rotate_cabinets.py --test --cabinet 0102 --retention 3
+
+# Реальна ротація
+docker exec mayan-app-1 /opt/mayan-edms/bin/python \
+  /var/lib/mayan/rotate_cabinets.py --run
+
+# Перевірити що буде видалено
+docker exec mayan-app-1 /opt/mayan-edms/bin/python \
+  /var/lib/mayan/rotate_cabinets.py --cleanup --dry-run
+
+# Видалити архіви
+docker exec mayan-app-1 /opt/mayan-edms/bin/python \
+  /var/lib/mayan/rotate_cabinets.py --cleanup
+```
+
+### Cron
+
+```bash
+crontab -e
+
+# Ротація — 1 січня о 02:00
+0 2 1 1 * docker exec mayan-app-1 /opt/mayan-edms/bin/python \
+  /var/lib/mayan/rotate_cabinets.py --run >> /var/log/rotate_cabinets.log 2>&1
+
+# Видалення архівів — 1 лютого о 02:00 (через місяць після ротації)
+0 2 1 2 * docker exec mayan-app-1 /opt/mayan-edms/bin/python \
+  /var/lib/mayan/rotate_cabinets.py --cleanup >> /var/log/rotate_cabinets.log 2>&1
+```
+
+### Параметри командного рядка
+
+| Параметр | Опис |
+|----------|------|
+| `--run` | Повна ротація всіх кабінетів |
+| `--test` | Dry-run — показує що буде зроблено |
+| `--cleanup` | Видаляє `_archive` папки старші 30 днів |
+| `--dry-run` | Без змін (з `--cleanup`) |
+| `--cabinet 0102` | Обробити тільки один кабінет |
+| `--year 2022` | Обробити тільки конкретний рік |
+| `--retention 3` | Змінити строк зберігання на 3 роки |
+
+### Змінні середовища
+
+```bash
+export MAX_RETENTION_YEARS=5        # строк зберігання (років)
+export ARCHIVE_DELETE_AFTER_DAYS=30 # затримка видалення архіву
+```
+
