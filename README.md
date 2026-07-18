@@ -1680,7 +1680,7 @@ docker cp /mnt/cephfs/mayan/sync_users_from_mysql.py mayan-app-1:/var/lib/mayan/
 
 # 5. Створюємо клініки
 docker cp clinics.csv mayan-app-1:/var/lib/mayan/
-bash import_clinics_from_csv.sh
+bash /opt/mayan-project/scripts/import_clinics_from_csv.sh
 
 # 6. rsync і імпорт файлів
 ./sync_clinic.sh 0101
@@ -1878,6 +1878,64 @@ for b in StoredDuplicateBackend.objects.all():
 Після цього в розділі **Documents with duplicates** будуть показуватись тільки файли з однаковим вмістом (checksum), незалежно від назви.
 
 > **Важливо:** після оновлення Mayan цей запис може відновитись. Перевіряй після кожного оновлення.
+
+
+---
+
+## Antivirus (ClamAV) — вимкнення та очищення черги
+
+### Проблема
+
+File metadata app (з версії 4.6) включає ClamAV як driver для антивірусного сканування документів.
+Оскільки `clamscan` — це CLI-утиліта (не демон `clamd`), вона перезавантажує повну базу сигнатур
+(~200+ МБ) **при кожному виклику**, що дає ~10 секунд накладних витрат на документ незалежно від
+його розміру. При великій кількості документів (десятки/сотні тисяч) це створює величезний backlog
+у черзі `file_metadata` (RabbitMQ) і 100% завантаження CPU одним ядром на довгий час.
+
+Симптом: `ps -ax | grep clamscan` постійно показує активний процес, що сканує різні документи по черзі,
+навіть після рестарту docker-стеку (Celery-задачі персистентні в RabbitMQ).
+
+### Вимкнення ClamAV-driver
+
+Через UI: **System → Document types → [конкретний тип] → File metadata drivers** →
+зняти галочку `Enabled` навпроти `ClamScan`. Робити для **кожного** document type окремо
+(EXIFTool та інші drivers залишити увімкненими).
+
+### Очищення накопиченої черги
+
+Вимкнення driver'а зупиняє появу нових задач, але не чистить вже накопичений backlog.
+Перевірити довжину черги та vhost:
+
+```bash
+docker exec mayan-rabbitmq-1 rabbitmqctl eval \
+  'lists:map(fun(Q) -> amqqueue:get_name(Q) end, rabbit_amqqueue:list()).'
+```
+
+Черга називається `file_metadata`, vhost — `mayan` (не `/`). Перевірити кількість задач:
+
+```bash
+docker exec mayan-rabbitmq-1 rabbitmqctl eval \
+  'rabbit_amqqueue:info(element(2, rabbit_amqqueue:lookup(rabbit_misc:r(<<"mayan">>, queue, <<"file_metadata">>))), [name, messages, consumers]).'
+```
+
+Якщо кількість критична (у нашому випадку — 970 619 задач, ~112 днів обробки при поточному темпі) —
+очистити чергу:
+
+```bash
+docker exec mayan-rabbitmq-1 rabbitmqctl purge_queue file_metadata -p mayan
+```
+
+> ⚠️ Це видаляє всі задачі file_metadata (включно з EXIFTool), не тільки ClamAV. Це не критично —
+> EXIF-метадані підтягуються заново при новому завантаженні файлу, а для існуючих документів їх
+> можна перегенерувати вручну: **Documents → вибрати всі → Actions → Submit for file metadata processing**
+> (уже без ClamAV, набагато швидше).
+
+### Примітка: `rabbitmqctl list_queues` може підвисати
+
+Стандартна команда `rabbitmqctl list_queues name messages consumers` синхронно опитує статистику
+кожної черги і може підвисати на сотні секунд навіть при здоровому RabbitMQ (без alarms, з нормальними
+ресурсами). Це не ознака проблеми з брокером — просто використовуйте `rabbitmqctl eval` замість
+`list_queues`, як показано вище.
 
 ---
 
