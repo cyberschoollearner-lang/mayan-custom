@@ -1934,6 +1934,124 @@ for b in StoredDuplicateBackend.objects.all():
 Після цього в розділі **Documents with duplicates** будуть показуватись тільки файли з однаковим вмістом (checksum), незалежно від назви.
 
 > **Важливо:** після оновлення Mayan цей запис може відновитись. Перевіряй після кожного оновлення.
+---
+
+## Індексація пошуку (PostgreSQL pg_trgm)
+
+### Проблема
+
+Пошук по назві файлу (`label ILIKE '%текст%'`) на таблиці `documents_document` з ~700k+ рядків
+виконував **Seq Scan** — повний перебір усієї таблиці, ~900ms на запит у БД і до хвилини у
+веб-інтерфейсі (Django ORM + рендеринг додають накладні витрати).
+
+### Рішення — GIN-індекс на тригramах
+
+```bash
+# Розширення (виконати один раз)
+docker exec mayan-postgresql-1 psql -U mayan \
+  -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+
+# Індекс — CONCURRENTLY не блокує таблицю і безпечний під час активного імпорту,
+# але НЕ можна виконувати в тій самій транзакції, що й CREATE EXTENSION
+docker exec mayan-postgresql-1 psql -U mayan \
+  -c "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_document_label_trgm ON documents_document USING gin (label gin_trgm_ops);"
+```
+
+Побудова індексу на ~700k рядків займає 5–10 хвилин і не заважає паралельному імпорту документів.
+
+### Результат
+
+| | До індексу | Після індексу |
+|---|---|---|
+| Метод | Seq Scan (повний перебір) | Bitmap Index Scan |
+| Рядків перебрано | 709 103 | 12 005 |
+| Execution Time (БД) | 894 ms | 68 ms |
+| Реальний час запиту | 1.08 s | 0.22 s |
+
+Приблизно **у 13 разів швидше**. Перевірити план запиту:
+
+```bash
+docker exec mayan-postgresql-1 psql -U mayan -c "
+EXPLAIN ANALYZE
+SELECT id, label FROM documents_document
+WHERE label ILIKE '%частина_назви%'
+LIMIT 10;
+"
+```
+Очікуваний план — `Bitmap Index Scan on idx_document_label_trgm`, а не `Seq Scan`.
+
+---
+
+## sync_and_import.sh — об'єднаний rsync + імпорт
+
+Об'єднує `sync_clinic.sh` (rsync з remote-серверів) та `import_clinic.py` (імпорт у Mayan)
+в один прохід по списку клінік, з низьким пріоритетом CPU для імпорту.
+
+### `/opt/mayan/sync_and_import.sh`
+
+```bash
+#!/bin/bash
+# sync_and_import.sh — rsync + імпорт клінік в один прохід
+#
+# Використання:
+#   ./sync_and_import.sh 0120 0121 0122 0123   # список клінік
+#   ./sync_and_import.sh --all                 # всі клініки з remote
+#   ./sync_and_import.sh --no-rsync 0120 0121  # тільки імпорт
+#   ./sync_and_import.sh --no-import 0120 0121 # тільки rsync
+
+MAYAN_CONTAINER="mayan-app-1"
+LOG_DIR="/mnt/cephfs/mayan/logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/sync_import_$(date +%Y%m%d_%H%M%S).log"
+
+DO_RSYNC=true
+DO_IMPORT=true
+CLINICS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-rsync)  DO_RSYNC=false; shift ;;
+        --no-import) DO_IMPORT=false; shift ;;
+        --all)       CLINICS=($(bash /opt/mayan/sync_clinic.sh --list-all 2>/dev/null)); shift ;;
+        *)           CLINICS+=("$1"); shift ;;
+    esac
+done
+
+for CLINIC in "${CLINICS[@]}"; do
+    echo "=== $CLINIC ===" | tee -a "$LOG_FILE"
+
+    if $DO_RSYNC; then
+        bash /opt/mayan/sync_clinic.sh "$CLINIC" 2>&1 | tee -a "$LOG_FILE"
+    fi
+
+    if $DO_IMPORT; then
+        docker exec "$MAYAN_CONTAINER" nice -n 19 /opt/mayan-edms/bin/python \
+          /var/lib/mayan/import_clinic.py "$CLINIC" 2>&1 | tee -a "$LOG_FILE"
+    fi
+done
+
+echo "=== ВСІ КЛІНІКИ ОБРОБЛЕНО ===" | tee -a "$LOG_FILE"
+```
+
+### Використання
+
+```bash
+chmod +x /opt/mayan/sync_and_import.sh
+
+# Список клінік
+./sync_and_import.sh 0120 0121 0122 0123
+
+# Тільки імпорт вже синхронізованих файлів
+./sync_and_import.sh --no-rsync 0120 0121
+```
+
+`nice -n 19` — імпорт іде з найнижчим пріоритетом CPU, не заважає іншим процесам на сервері.
+Лог кожного запуску зберігається окремим файлом у `/mnt/cephfs/mayan/logs/`.
+
+> ⚠️ Не рестартуйте `mayan-app-1` поки триває імпорт — процес `import_clinic.py` виконується
+> всередині контейнера; рестарт обірве поточний файл на середині й може лишити документ
+> у напівстані (Document створено, DocumentFile — ні). Перевірити активний імпорт:
+> `ps -ax | grep import_clinic`.
 
 ---
 

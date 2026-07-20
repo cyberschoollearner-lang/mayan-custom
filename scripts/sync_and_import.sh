@@ -8,14 +8,14 @@
 #   ./sync_and_import.sh --no-import 0120 0121  # тільки rsync без імпорту
 
 # ─── Конфіг ──────────────────────────────────────────────────────────────────
-REMOTE_HOST1="xxx.xxx.xxx.5"
+REMOTE_HOST1="10.195.67.5"
 REMOTE_PATHS1=(
     "/var/snap/public"
-    "/var/snap/yyy.yyy.yyy.yyy/new/public"
-    "/var/snap/yyy.yyy.yyy.yyy/public"
+    "/var/snap/176.111.63.55/new/public"
+    "/var/snap/176.111.63.55/public"
 )
 
-REMOTE_HOST2="zzz.zzz.zzz.55"
+REMOTE_HOST2="176.111.63.55"
 REMOTE_PATHS2=(
     "/public"
 )
