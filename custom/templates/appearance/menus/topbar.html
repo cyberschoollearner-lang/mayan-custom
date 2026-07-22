@@ -61,6 +61,27 @@
             </div>
         </div>
     </nav>
+<style>
+    /* Розширення полів пошуку: "Filter terms" (список документів) і "Search terms" (навбар) */
+    #search-filter-input-terms {
+        width: 100% !important;
+        min-width: 320px;
+    }
+    .btn-toolbar-search-filter,
+    .btn-toolbar-search-filter .form-group,
+    .btn-toolbar-search-filter form {
+        width: 100%;
+    }
+    #search-navbar-form-input-terms {
+        width: 320px !important;
+    }
+    @media (min-width: 1200px) {
+        #search-navbar-form-input-terms {
+            width: 450px !important;
+        }
+    }
+</style>
+
 {% endspaceless %}
 
 {% if request.user.is_authenticated %}

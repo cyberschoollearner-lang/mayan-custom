@@ -420,6 +420,7 @@ class CustomConfig(MayanAppConfig):
         super().ready()
         import custom.signals  # noqa
         self._remove_columns()
+        self._remove_duplicate_backend_label()
 
     def _remove_columns(self):
         try:
@@ -428,11 +429,9 @@ class CustomConfig(MayanAppConfig):
                 Document, DocumentFile, DocumentVersion,
                 DocumentFilePage, DocumentVersionPage
             )
-
             REMOVE_LABELS = {
                 'Thumbnail', 'Type', 'Metadata', 'Pages', 'Tags',
             }
-
             for source in (Document, DocumentFile, DocumentVersion,
                            DocumentFilePage, DocumentVersionPage):
                 if source in SourceColumn._registry:
@@ -440,9 +439,24 @@ class CustomConfig(MayanAppConfig):
                         col for col in SourceColumn._registry[source]
                         if col.__dict__.get('label', '') not in REMOVE_LABELS
                     ]
-
         except Exception as e:
             print(f'[CUSTOM] remove_columns error: {e}')
+
+    def _remove_duplicate_backend_label(self):
+        # Прибираємо DuplicateBackendLabel з реєстру backend-класів,
+        # щоб Mayan не пересинхронізовував його назад у StoredDuplicateBackend
+        # після кожного імпорту/завантаження документа.
+        # Залишається лише DuplicateBackendFileChecksum (перевірка по чексумі).
+        try:
+            from mayan.apps.duplicates.classes import DuplicateBackendMetaclass
+
+            label_key = (
+                'mayan.apps.duplicates.duplicate_backends.'
+                'DuplicateBackendLabel'
+            )
+            DuplicateBackendMetaclass._registry.pop(label_key, None)
+        except Exception as e:
+            print(f'[CUSTOM] remove_duplicate_backend_label error: {e}')
 
     @classmethod
     def get_template_dirs(cls):
@@ -672,7 +686,7 @@ urlpatterns = [
                     <span class="icon-bar"></span>
                 </button>
                 <div id="ajax-spinner" style="display: none;"></div>
-                <a class="navbar-brand" href="{% url home_view %}"><span class="icon-mayan-edms-logo"></span> MYCOMPANY</a>
+                <a class="navbar-brand" href="{% url home_view %}"><span class="icon-mayan-edms-logo"></span> INSIDDEN</a>
             </div>
             <div class="collapse navbar-collapse" id="navbar">
                 <ul class="nav navbar-nav navbar-right">
@@ -714,11 +728,33 @@ urlpatterns = [
                         </a>
                     </li>
                     {% endif %}
+
                 </ul>
                 {% appearance_app_templates template_name='topbar' %}
             </div>
         </div>
     </nav>
+<style>
+    /* Розширення полів пошуку: "Filter terms" (список документів) і "Search terms" (навбар) */
+    #search-filter-input-terms {
+        width: 100% !important;
+        min-width: 320px;
+    }
+    .btn-toolbar-search-filter,
+    .btn-toolbar-search-filter .form-group,
+    .btn-toolbar-search-filter form {
+        width: 100%;
+    }
+    #search-navbar-form-input-terms {
+        width: 320px !important;
+    }
+    @media (min-width: 1200px) {
+        #search-navbar-form-input-terms {
+            width: 450px !important;
+        }
+    }
+</style>
+
 {% endspaceless %}
 
 {% if request.user.is_authenticated %}
@@ -759,6 +795,7 @@ urlpatterns = [
                 var lastSeenId = getLastSeenId();
                 if (maxId > lastSeenId) {
                     setLastSeenId(maxId);
+                    // Автоматично завантажуємо файл
                     window.open(results[0].download_url, '_blank');
                 }
             } else {
@@ -1753,51 +1790,107 @@ print('ГОТОВО')
 
 ## Бекап та відновлення
 
-### `backup.sh`
+### `backups.sh`
 
 ```bash
 #!/bin/bash
+# backups.sh — бекап всіх важливих файлів Mayan EDMS + коміт у git
+#
+# Використання:
+#   ./backups.sh              # повний бекап + git commit + push
+#   ./backups.sh --no-git     # тільки бекап, без git
+
+DO_GIT=true
+[[ "$1" == "--no-git" ]] && DO_GIT=false
+
 BACKUP_DIR="/mnt/cephfs/backup/$(date +%Y%m%d_%H%M)"
+PROJECT_DIR="/opt/mayan-project"
 mkdir -p "$BACKUP_DIR"/{custom,settings,scripts,config}
 
 echo "=== Бекап в $BACKUP_DIR ==="
 
-# БД
+# 1. БД PostgreSQL
+echo "--- БД ---"
 docker exec mayan-postgresql-1 pg_dump -U mayan mayan | gzip \
   > "$BACKUP_DIR/mayan_db.sql.gz"
+ls -lh "$BACKUP_DIR/mayan_db.sql.gz"
 
-# Docker
+# 2. Docker конфіг
+echo "--- Docker ---"
 cp /opt/mayan/docker-compose.yml "$BACKUP_DIR/config/"
 cp /opt/mayan/.env               "$BACKUP_DIR/config/"
 cp /opt/mayan/.env-local         "$BACKUP_DIR/config/" 2>/dev/null || true
 
-# Config
+# 3. Mayan config.yml
+echo "--- config.yml ---"
 cp /mnt/cephfs/mayan/config.yml "$BACKUP_DIR/config/"
 
-# Custom app
+# 4. Custom додаток
+echo "--- Custom app ---"
 cp /opt/mayan/custom/__init__.py   "$BACKUP_DIR/custom/"
 cp /opt/mayan/custom/apps.py       "$BACKUP_DIR/custom/"
 cp /opt/mayan/custom/middleware.py "$BACKUP_DIR/custom/"
 cp /opt/mayan/custom/signals.py    "$BACKUP_DIR/custom/"
-cp /opt/mayan/custom/views.py      "$BACKUP_DIR/custom/"
-cp /opt/mayan/custom/urls.py       "$BACKUP_DIR/custom/"
+cp /opt/mayan/custom/views.py      "$BACKUP_DIR/custom/" 2>/dev/null || true
+cp /opt/mayan/custom/urls.py       "$BACKUP_DIR/custom/" 2>/dev/null || true
 mkdir -p "$BACKUP_DIR/custom/templates/appearance/menus"
 cp /opt/mayan/custom/templates/appearance/menus/topbar.html \
    "$BACKUP_DIR/custom/templates/appearance/menus/"
 
-# Settings
-cp /opt/mayan/settings/local.py "$BACKUP_DIR/settings/"
+# 5. Settings
+echo "--- Settings ---"
+cp /opt/mayan/settings/local.py "$BACKUP_DIR/settings/" 2>/dev/null || true
 
-# Скрипти
+# 6. Скрипти
+echo "--- Скрипти ---"
 cp /mnt/cephfs/mayan/import_clinic.py         "$BACKUP_DIR/scripts/"
-cp /mnt/cephfs/mayan/sync_users_from_mysql.py "$BACKUP_DIR/scripts/"
-cp /opt/mayan/sync_clients.sh                 "$BACKUP_DIR/scripts/"
-cp /opt/mayan/sync_clinic.sh                  "$BACKUP_DIR/scripts/"
+cp /mnt/cephfs/mayan/sync_users_from_mysql.py "$BACKUP_DIR/scripts/" 2>/dev/null || true
+cp /opt/mayan/sync_clients.sh                 "$BACKUP_DIR/scripts/" 2>/dev/null || true
+cp /opt/mayan/sync_clinic.sh                  "$BACKUP_DIR/scripts/" 2>/dev/null || true
+cp /mnt/cephfs/mayan/rotate_cabinets.py       "$BACKUP_DIR/scripts/" 2>/dev/null || true
+cp /opt/mayan/sync_and_import.sh              "$BACKUP_DIR/scripts/" 2>/dev/null || true
+cp /mnt/cephfs/backup/backups.sh              "$BACKUP_DIR/scripts/" 2>/dev/null || true
 
-# Медіа
-cp /mnt/cephfs/mayan/login_bg.jpg "$BACKUP_DIR/"
+# 7. Медіа
+echo "--- Медіа ---"
+cp /mnt/cephfs/mayan/login_bg.jpg "$BACKUP_DIR/" 2>/dev/null || true
 
-echo "=== ГОТОВО ===" && du -sh "$BACKUP_DIR"
+echo ""
+echo "=== ГОТОВО ==="
+echo "Розмір бекапу:"
+du -sh "$BACKUP_DIR"
+ls -lh "$BACKUP_DIR/"
+ls -lh "$BACKUP_DIR/custom/"
+ls -lh "$BACKUP_DIR/scripts/"
+ls -lh "$BACKUP_DIR/config/"
+
+# 8. Синхронізація в git-проєкт і коміт
+if $DO_GIT; then
+    echo ""
+    echo "--- Git sync ---"
+    cp /opt/mayan/custom/*.py "$PROJECT_DIR/custom/" 2>/dev/null
+    cp /opt/mayan/custom/templates/appearance/menus/topbar.html \
+       "$PROJECT_DIR/custom/templates/appearance/menus/"
+    cp /opt/mayan/settings/local.py "$PROJECT_DIR/settings/" 2>/dev/null
+    cp /opt/mayan/docker-compose.yml "$PROJECT_DIR/"
+    cp /mnt/cephfs/mayan/import_clinic.py "$PROJECT_DIR/scripts/"
+    cp /mnt/cephfs/mayan/sync_users_from_mysql.py "$PROJECT_DIR/scripts/" 2>/dev/null
+    cp /mnt/cephfs/mayan/rotate_cabinets.py "$PROJECT_DIR/scripts/" 2>/dev/null
+    cp /opt/mayan/sync_clinic.sh "$PROJECT_DIR/scripts/" 2>/dev/null
+    cp /opt/mayan/sync_clients.sh "$PROJECT_DIR/scripts/" 2>/dev/null
+    cp /opt/mayan/sync_and_import.sh "$PROJECT_DIR/scripts/" 2>/dev/null
+    cp "$0" "$PROJECT_DIR/scripts/backups.sh"
+
+    cd "$PROJECT_DIR"
+    git add -A
+    if ! git diff --cached --quiet; then
+        git commit -m "sync: автобекап $(date +%Y-%m-%d\ %H:%M) — оновлені скрипти й конфіги"
+        git push
+        echo "=== Закомічено і запушено ==="
+    else
+        echo "=== Змін немає, коміт не потрібен ==="
+    fi
+fi
 ```
 
 ### Відновлення БД
@@ -1933,7 +2026,7 @@ for b in StoredDuplicateBackend.objects.all():
 
 Після цього в розділі **Documents with duplicates** будуть показуватись тільки файли з однаковим вмістом (checksum), незалежно від назви.
 
-> **Важливо:** після оновлення Mayan цей запис може відновитись. Перевіряй після кожного оновлення.
+> **Важливо:** Mayan автоматично реєструє `DuplicateBackendLabel` назад у реєстр (`DuplicateBackendMetaclass._registry`) при кожному скануванні документа (імпорт, веб-завантаження), тому одноразове видалення з БД не є стійким. Постійний фікс зроблено в `custom/apps.py` методом `_remove_duplicate_backend_label()` (див. вище) — він прибирає клас з реєстру при кожному старті додатку, і Mayan більше не може пересинхронізувати його назад.
 ---
 
 ## Індексація пошуку (PostgreSQL pg_trgm)
@@ -2600,4 +2693,3 @@ crontab -e
 export MAX_RETENTION_YEARS=5        # строк зберігання (років)
 export ARCHIVE_DELETE_AFTER_DAYS=30 # затримка видалення архіву
 ```
-
