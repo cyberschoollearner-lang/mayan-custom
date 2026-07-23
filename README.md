@@ -2357,6 +2357,77 @@ docker restart mayan-app-1
 
 ---
 
+## Логування спроб входу і захист fail2ban
+
+### Проблема
+
+За замовчуванням Mayan не логує спроби автентифікації в зручному для парсингу форматі,
+тому неможливо було виявляти брутфорс через стандартні логи.
+
+### Логування через Django auth-сигнали
+
+`custom/signals.py` підписується на `user_logged_in`, `user_logged_out`, `user_login_failed`
+і пише окремий лог `/var/lib/mayan/logs/auth.log` (на хості — `/mnt/cephfs/mayan/logs/auth.log`)
+з ротацією через `RotatingFileHandler` (10×10MB, незалежно від `logrotate`):
+
+
+**Важливо:** папку `logs/` потрібно створити заздалегідь на хості з правильним власником —
+інакше контейнер падає в циклічний рестарт з `PermissionError`:
+
+```bash
+mkdir -p /mnt/cephfs/mayan/logs
+chown -R 1000:1000 /mnt/cephfs/mayan/logs
+chmod 755 /mnt/cephfs/mayan/logs
+docker restart mayan-app-1
+```
+
+### fail2ban
+
+```bash
+cat > /etc/fail2ban/filter.d/mayan.conf << 'EOF'
+[Definition]
+failregex = ^.* \[AUTH FAIL\] user=.* ip=<HOST>$
+ignoreregex =
+EOF
+
+cat > /etc/fail2ban/jail.d/mayan.conf << 'EOF'
+[mayan]
+enabled  = true
+port     = http,https
+filter   = mayan
+logpath  = /mnt/cephfs/mayan/logs/auth.log
+maxretry = 5
+findtime = 300
+bantime  = 3600
+EOF
+
+systemctl restart fail2ban
+fail2ban-client status mayan
+```
+
+5 невдалих спроб за 5 хвилин з одного IP → бан на годину.
+
+### Ротація auth.log через logrotate (додатково до вбудованої)
+
+```bash
+cat > /etc/logrotate.d/mayan << 'EOF'
+/mnt/cephfs/mayan/logs/*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    dateext
+    dateformat -%Y%m%d
+}
+EOF
+```
+
+
+---
+
 ## Ротація файлів по роках (`rotate_cabinets.py`)
 
 Скрипт автоматично розподіляє документи по підкабінетах-роках і видаляє застарілі.

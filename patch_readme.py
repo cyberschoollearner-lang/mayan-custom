@@ -22,7 +22,7 @@ text = replace_code_block(text, '### `/opt/mayan/custom/templates/appearance/men
 pattern = re.compile(r'### `backup\.sh`\n\n```bash\n.*?\n```', re.DOTALL)
 replacement = '### `backups.sh`\n\n```bash\n' + backups_sh + '\n```'
 text, n = pattern.subn(replacement, text, count=1)
-print('[OK] backup.sh -> backups.sh' if n else '[WARN] не знайдено backup.sh')
+print('[OK] backup.sh -> backups.sh' if n else '[WARN] не знайдено backup.sh (можливо вже перейменовано)')
 
 old_note = ('> **Важливо:** після оновлення Mayan цей запис може відновитись. '
             'Перевіряй після кожного оновлення.')
@@ -36,11 +36,9 @@ if old_note in text:
     text = text.replace(old_note, new_note)
     print('[OK] нотатка про дублікати оновлена')
 else:
-    print('[WARN] стару нотатку не знайдено')
+    print('[SKIP] стару нотатку не знайдено (можливо вже оновлена)')
 
-search_section = '''---
-
-## Розширення полів пошуку (Filter terms / Search terms)
+search_section = '''## Розширення полів пошуку (Filter terms / Search terms)
 
 За замовчуванням Bootstrap-навбар звужує `.form-control` до вузької ширини. Поле **Filter terms**
 (список документів, `dynamic_search/app/list_toolbar.html`) і **Search terms** (навбар,
@@ -65,12 +63,22 @@ search_section = '''---
 до нового кабінету по checksum), можуть не з'являтись у результатах пошуку одразу — індексація
 йде асинхронно через Celery. Це очікувана поведінка, не помилка.
 
+---
+
 '''
+
 if 'Розширення полів пошуку' not in text:
-    text = text.replace('## HTTPS', search_section + '## HTTPS', 1)
-    print('[OK] додано секції про пошук і затримку індексації')
+    target = '---\n\n## HTTPS'
+    if target in text:
+        text = text.replace(target, search_section + '## HTTPS', 1)
+        print('[OK] додано секції про пошук і затримку індексації')
+    elif '## HTTPS' in text:
+        text = text.replace('## HTTPS', search_section + '## HTTPS', 1)
+        print('[OK] додано секції про пошук і затримку індексації (без ---)')
+    else:
+        print('[ERROR] не знайдено якір "## HTTPS" — секції НЕ додано!')
 else:
-    print('[SKIP] секція вже є')
+    print('[SKIP] секція "Розширення полів пошуку" вже є')
 
 with open('README.md', 'w', encoding='utf-8') as f:
     f.write(text)
