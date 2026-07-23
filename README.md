@@ -2147,6 +2147,32 @@ chmod +x /opt/mayan/sync_and_import.sh
 > `ps -ax | grep import_clinic`.
 
 ---
+## Розширення полів пошуку (Filter terms / Search terms)
+
+За замовчуванням Bootstrap-навбар звужує `.form-control` до вузької ширини. Поле **Filter terms**
+(список документів, `dynamic_search/app/list_toolbar.html`) і **Search terms** (навбар,
+`dynamic_search/search_box_toolbar.html`) — обидва прив'язані до реального search backend
+(не client-side фільтр), тому обмеження стосується лише візуальної ширини.
+
+Розширено через CSS-override у `custom/templates/appearance/menus/topbar.html`:
+
+```css
+#search-filter-input-terms { width: 100% !important; min-width: 320px; }
+#search-navbar-form-input-terms { width: 320px !important; }
+@media (min-width: 1200px) {
+    #search-navbar-form-input-terms { width: 450px !important; }
+}
+```
+
+---
+
+## Затримка індексації після імпорту
+
+Документи, додані через `import_clinic.py` (в т.ч. `[LINK]` — прив'язка існуючого документа
+до нового кабінету по checksum), можуть не з'являтись у результатах пошуку одразу — індексація
+йде асинхронно через Celery. Це очікувана поведінка, не помилка.
+
+---
 
 ## HTTPS
 
