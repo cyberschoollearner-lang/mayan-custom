@@ -65,12 +65,22 @@ def add_to_cabinet_with_acl(document, cabinet):
         *StoredPermission.objects.filter(name__in=DOCUMENT_PERMISSIONS)
     )
 
-
 def register_via_hardlink(filepath, filename, document):
     file_uuid = str(uuid.uuid4())
     dest_path = os.path.join(MAYAN_STORAGE, file_uuid)
 
     os.link(filepath, dest_path)
+
+    # Хардлінк успадковує власника оригінального файлу (часто root,
+    # бо rsync виконується з хоста). Mayan-процес працює під uid 1000 (mayan),
+    # тому без явного chown Celery не зможе видалити/оновити цей файл пізніше.
+    try:
+        os.chown(dest_path, 1000, 1000)
+    except PermissionError:
+        # Скрипт запускається не з root — chown неможливий, залишаємо
+        # як є і попереджаємо в лог, щоб не приховувати проблему.
+        print(f'[WARNING] Не вдалось змінити власника {dest_path} — '
+              f'запусти import_clinic.py з правами root')
 
     try:
         doc_file = DocumentFile(
@@ -95,6 +105,43 @@ def register_via_hardlink(filepath, filename, document):
             comment='',
             user=None,
         )
+
+    except Exception:
+        if os.path.exists(dest_path):
+            os.remove(dest_path)
+        raise
+
+    return dest_path
+
+#def register_via_hardlink(filepath, filename, document):
+#    file_uuid = str(uuid.uuid4())
+#    dest_path = os.path.join(MAYAN_STORAGE, file_uuid)
+#
+#    os.link(filepath, dest_path)
+#
+#    try:
+#        doc_file = DocumentFile(
+#            document=document,
+#            comment='',
+#            filename=filename,
+#        )
+#        doc_file.file.name = file_uuid
+#        doc_file._event_actor = None
+#        doc_file._event_ignore = True
+#
+#        Model.save(doc_file)
+#
+#        document.file_latest = doc_file
+#        document.is_stub = False
+#        document.save(update_fields=('file_latest', 'is_stub'))
+#
+#        doc_file._introspect()
+#
+#        doc_file.versions_new(
+#            action_name=DEFAULT_DOCUMENT_FILE_ACTION_NAME,
+#            comment='',
+#            user=None,
+#        )
 
     except Exception:
         if os.path.exists(dest_path):

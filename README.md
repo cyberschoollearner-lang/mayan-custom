@@ -2425,6 +2425,59 @@ cat > /etc/logrotate.d/mayan << 'EOF'
 EOF
 ```
 
+---
+
+## Права власника document_storage (PermissionError при видаленні/завантаженні)
+
+### Симптом
+
+- "Empty trash" в UI не видаляє документи — Celery падає з `PermissionError: [Errno 13]
+  Permission denied: '/var/lib/mayan/document_storage/<uuid>'`.
+- Веб-завантаження документа мовчки завершується документом-заглушкою (`is_stub=True`,
+  `file_latest=None`, 0 записів `DocumentFile`) — у логах `_create() ... Error creating new
+  document file ... Permission denied`.
+
+### Причина
+
+Каталог `/var/lib/mayan/document_storage` (на хості — `/mnt/cephfs/mayan/document_storage`)
+опинився у власності `root:root` замість `mayan:mayan` (uid/gid 1000). Celery-воркери
+(`worker_a`...`worker_e`) працюють під користувачем `mayan`, тому не мають права писати
+чи видаляти файли в цьому каталозі — незалежно від власника самого файлу.
+
+Перевірка через `docker exec` **без** `-u mayan` вводить в оману: за замовчуванням `docker exec`
+виконується від `root`, який має доступ до каталогу і може видаляти/писати файли навіть коли
+реальний production-процес (Celery) — ні. Тестувати права потрібно саме так:
+
+```bash
+docker exec -u mayan mayan-app-1 rm -v /var/lib/mayan/document_storage/<uuid>
+```
+
+### Фікс
+
+```bash
+docker exec mayan-app-1 chown mayan:mayan /var/lib/mayan/document_storage
+docker exec mayan-app-1 stat /var/lib/mayan/document_storage   # Uid має бути (1000/mayan)
+```
+
+Якщо власника файлів усередині теж треба масово виправити (наприклад, після `docker cp` чи
+міграції даних):
+
+```bash
+docker exec mayan-app-1 sh -c "find /var/lib/mayan/document_storage -maxdepth 1 -type f -not -user mayan | wc -l"
+docker exec mayan-app-1 chown -R mayan:mayan /var/lib/mayan/document_storage
+```
+
+### Профілактика в коді
+
+`custom/apps.py` метод `_ensure_storage_permissions()` перевіряє власника `document_storage`
+при кожному старті контейнера і виводить попередження в `docker logs`, якщо він не `mayan`
+(автоматичний `chown -R` на старті навмисно не робиться — на 900k+ файлів це небезпечно і
+повільно виконувати мовчки).
+
+`scripts/import_clinic.py` тепер явно виставляє `os.chown(dest_path, 1000, 1000)` одразу
+після `os.link()` — хардлінк інакше успадковує власника оригінального файлу з `/mnt/cephfs/clinic/`
+(часто `root`, бо `rsync` виконується з хоста), і кожен новий імпорт продовжував би плодити
+файли з неправильним власником.
 
 ---
 

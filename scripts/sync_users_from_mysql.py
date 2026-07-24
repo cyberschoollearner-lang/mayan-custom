@@ -30,9 +30,9 @@ from mayan.apps.views.models import UserViewMode
 DB_CONFIG = {
     'host':      '127.0.0.1',
     'port':      3306,
-    'user':      '<username>',
-    'password':  '<password>',
-    'database':  '<databasename>',
+    'user':      'threedcenter',
+    'password':  'IzNGBOmfouIg5kZ',
+    'database':  'threedcenter',
     'charset':   'utf8mb4',
     'cursorclass': pymysql.cursors.DictCursor,
 }
