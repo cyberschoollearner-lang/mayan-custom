@@ -113,43 +113,6 @@ def register_via_hardlink(filepath, filename, document):
 
     return dest_path
 
-#def register_via_hardlink(filepath, filename, document):
-#    file_uuid = str(uuid.uuid4())
-#    dest_path = os.path.join(MAYAN_STORAGE, file_uuid)
-#
-#    os.link(filepath, dest_path)
-#
-#    try:
-#        doc_file = DocumentFile(
-#            document=document,
-#            comment='',
-#            filename=filename,
-#        )
-#        doc_file.file.name = file_uuid
-#        doc_file._event_actor = None
-#        doc_file._event_ignore = True
-#
-#        Model.save(doc_file)
-#
-#        document.file_latest = doc_file
-#        document.is_stub = False
-#        document.save(update_fields=('file_latest', 'is_stub'))
-#
-#        doc_file._introspect()
-#
-#        doc_file.versions_new(
-#            action_name=DEFAULT_DOCUMENT_FILE_ACTION_NAME,
-#            comment='',
-#            user=None,
-#        )
-
-    except Exception:
-        if os.path.exists(dest_path):
-            os.remove(dest_path)
-        raise
-
-    return dest_path
-
 
 def import_file(filepath, cabinet):
     raw_filename = os.path.basename(filepath)
