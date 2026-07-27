@@ -1,8 +1,9 @@
-import os, sys, django
+mport os, sys, django
 from datetime import datetime
 import uuid
 import hashlib
 import fcntl
+import multiprocessing as mp
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mayan.settings.production')
 django.setup()
@@ -56,7 +57,23 @@ except Role.DoesNotExist:
 
 doc_type, _ = DocumentType.objects.get_or_create(label='Clinic Documents')
 doc_ct       = ContentType.objects.get_for_model(Document)
-counter      = {'ok': 0, 'skip': 0, 'linked': 0, 'error': 0}
+
+# Глобальний лічильник актуальний тільки в послідовному режимі (workers=1).
+# В паралельному режимі кожен воркер — окремий процес із власною копією
+# пам'яті, тому підсумок рахується в батьківському процесі з результатів,
+# які повертає кожен pool.map-виклик (див. worker_import_file / main()).
+counter = {'ok': 0, 'skip': 0, 'linked': 0, 'error': 0}
+
+
+def get_default_workers():
+    """
+    Половина ядер хоста, мінімум 1, максимум 4 — обмеження навмисне:
+    кожен воркер тримає власне з'єднання з PostgreSQL і пише на CephFS,
+    занадто велика кількість паралельних процесів для ОДНІЄЇ клініки
+    може перевантажити БД/диск без відчутного приросту швидкості.
+    """
+    cpu = mp.cpu_count()
+    return max(1, min(4, cpu // 2))
 
 
 def clean_filename(filename):
@@ -134,17 +151,26 @@ def register_via_hardlink(filepath, filename, document):
 
 
 def import_file(filepath, cabinet):
+    """
+    Імпортує один файл у вказаний кабінет. Повертає статус:
+    'ok' | 'skip' | 'linked' | 'error' | None (порожнє ім'я, нічого не робимо).
+
+    Глобальний counter оновлюється тут для сумісності з послідовним режимом
+    (workers=1) — у паралельному режимі значення в дочірньому процесі
+    ігнорується, підсумок рахується в батьківському процесі окремо.
+    """
     raw_filename = os.path.basename(filepath)
     filename = clean_filename(raw_filename).strip()
 
     if not filename:
-        return
+        return None
 
     if not os.path.exists(filepath):
         # Файл міг зникнути між os.listdir() і обробкою (наприклад,
         # видалений паралельним процесом чи повторним запуском).
         print(f'[SKIP] {filename} — файл вже не існує (оброблено раніше?)', flush=True)
-        return
+        counter['skip'] += 1
+        return 'skip'
 
     checksum = sha256_file(filepath)
     existing_file = DocumentFile.objects.filter(checksum=checksum).first()
@@ -156,14 +182,16 @@ def import_file(filepath, cabinet):
         if already_in_cabinet:
             counter['skip'] += 1
             print(f'[SKIP] {filename} вже в кабінеті', flush=True)
+            status = 'skip'
         else:
             add_to_cabinet_with_acl(document, cabinet)
             counter['linked'] += 1
             print(f'[LINK] {filename} → існуючий документ pk:{document.pk}', flush=True)
+            status = 'linked'
 
         if os.path.exists(filepath):
             os.remove(filepath)
-        return
+        return status
 
     document  = None
     dest_path = None
@@ -185,9 +213,10 @@ def import_file(filepath, cabinet):
         add_to_cabinet_with_acl(document, cabinet)
 
         counter['ok'] += 1
-        print(f'[OK {counter["ok"]}] {filename} ({file_date.strftime("%Y-%m-%d")})', flush=True)
+        print(f'[OK] {filename} ({file_date.strftime("%Y-%m-%d")})', flush=True)
 
         os.remove(filepath)
+        return 'ok'
 
     except Exception as e:
         counter['error'] += 1
@@ -204,6 +233,40 @@ def import_file(filepath, cabinet):
                 os.remove(dest_path)
             except Exception:
                 pass
+        return 'error'
+
+
+def worker_import_file(args):
+    """
+    Обгортка для multiprocessing.Pool. Кожен воркер — форкнутий процес,
+    тому обов'язково закриваємо успадковані з'єднання БД одразу на старті:
+    Django відкриє нове з'єднання автоматично при першому запиті.
+    """
+    filepath, cabinet_id = args
+    from django import db
+    db.connections.close_all()
+
+    cabinet = Cabinet.objects.get(pk=cabinet_id)
+    status = import_file(filepath, cabinet)
+    return status
+
+
+def import_files_batch(filepaths, cabinet, workers):
+    """
+    Імпортує список файлів у кабінет. Якщо workers > 1 і файлів більше
+    одного — паралельно через Pool, інакше послідовно (без накладних
+    витрат на форк процесів заради 1-2 файлів).
+    """
+    if workers > 1 and len(filepaths) > 1:
+        args = [(fp, cabinet.pk) for fp in filepaths]
+        with mp.Pool(workers) as pool:
+            results = pool.map(worker_import_file, args)
+        for status in results:
+            if status:
+                counter[status] += 1
+    else:
+        for fpath in filepaths:
+            import_file(fpath, cabinet)
 
 
 def get_or_create_sub(parent, label):
@@ -235,23 +298,32 @@ def main():
     total = sum(len(files) for _, _, files in os.walk(CLINIC_DIR))
     print(f'[INFO] Всього файлів: {total}', flush=True)
 
+    workers = int(os.environ.get('IMPORT_WORKERS', get_default_workers()))
+    print(f'[INFO] Потоків: {workers}', flush=True)
+
     root_cabinet, _ = Cabinet.objects.get_or_create(label=CLINIC_ID)
 
-    for fname in sorted(os.listdir(CLINIC_DIR)):
-        fpath = os.path.join(CLINIC_DIR, fname)
-        if os.path.isfile(fpath):
-            import_file(fpath, root_cabinet)
+    # Файли в корені
+    root_files = [
+        os.path.join(CLINIC_DIR, f) for f in sorted(os.listdir(CLINIC_DIR))
+        if os.path.isfile(os.path.join(CLINIC_DIR, f))
+    ]
+    import_files_batch(root_files, root_cabinet, workers)
 
+    # Підпапки (роки) — обробляються послідовно одна за одною, але файли
+    # всередині кожного року — паралельно
     for year_dir in sorted(os.listdir(CLINIC_DIR)):
         year_path = os.path.join(CLINIC_DIR, year_dir)
         if not os.path.isdir(year_path):
             continue
         print(f'[DIR] {year_dir}', flush=True)
         year_cabinet = get_or_create_sub(root_cabinet, year_dir)
-        for fname in sorted(os.listdir(year_path)):
-            fpath = os.path.join(year_path, fname)
-            if os.path.isfile(fpath):
-                import_file(fpath, year_cabinet)
+
+        year_files = [
+            os.path.join(year_path, f) for f in sorted(os.listdir(year_path))
+            if os.path.isfile(os.path.join(year_path, f))
+        ]
+        import_files_batch(year_files, year_cabinet, workers)
 
     print(f'\n=== {CLINIC_ID} ЗАВЕРШЕНО ===', flush=True)
     print(f'OK: {counter["ok"]} | LINK: {counter["linked"]} | SKIP: {counter["skip"]} | ERROR: {counter["error"]}')
