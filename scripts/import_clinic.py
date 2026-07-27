@@ -1,4 +1,4 @@
-mport os, sys, django
+import os, sys, django
 from datetime import datetime
 import uuid
 import hashlib
@@ -250,24 +250,37 @@ def worker_import_file(args):
     status = import_file(filepath, cabinet)
     return status
 
-
 def import_files_batch(filepaths, cabinet, workers):
     """
     Імпортує список файлів у кабінет. Якщо workers > 1 і файлів більше
-    одного — паралельно через Pool, інакше послідовно (без накладних
-    витрат на форк процесів заради 1-2 файлів).
+    одного — паралельно через Pool, інакше послідовно.
     """
     if workers > 1 and len(filepaths) > 1:
+        from django import db
+
+        # КРИТИЧНО: закриваємо з'єднання з БД у батьківському процесі
+        # ПЕРЕД fork(). Якщо цього не зробити, дочірні процеси успадкують
+        # той самий файловий дескриптор TCP-сокета до PostgreSQL — кілька
+        # процесів одночасно читають/пишуть у той самий сокет ще до того,
+        # як встигнуть відкрити власні нові з'єднання, що пошкоджує
+        # протокол з точки зору сервера ("server closed the connection
+        # unexpectedly"), навіть попри close_all() всередині воркера.
+        db.connections.close_all()
+
         args = [(fp, cabinet.pk) for fp in filepaths]
         with mp.Pool(workers) as pool:
             results = pool.map(worker_import_file, args)
+
+        # Батьківське з'єднання теж могло стати невалідним через forking —
+        # примусово відкриваємо свіже перед подальшою роботою.
+        db.connections.close_all()
+
         for status in results:
             if status:
                 counter[status] += 1
     else:
         for fpath in filepaths:
             import_file(fpath, cabinet)
-
 
 def get_or_create_sub(parent, label):
     sub, _ = Cabinet.objects.get_or_create(label=label, parent=parent)
