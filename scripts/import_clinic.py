@@ -2,6 +2,7 @@ import os, sys, django
 from datetime import datetime
 import uuid
 import hashlib
+import fcntl
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mayan.settings.production')
 django.setup()
@@ -27,6 +28,25 @@ DOCUMENT_PERMISSIONS = [
     'document_file_download',
     'document_file_print',
 ]
+
+
+def acquire_lock(clinic_id):
+    """
+    Захист від паралельного запуску import_clinic.py на ту саму клініку
+    (наприклад, через збіг cron + ручного запуску). flock автоматично
+    звільняється навіть якщо процес впаде некоректно.
+    """
+    lock_path = f'/tmp/import_clinic_{clinic_id}.lock'
+    lock_file = open(lock_path, 'w')
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f'[LOCK] Імпорт {clinic_id} вже виконується іншим процесом. Виходжу.')
+        sys.exit(1)
+    return lock_file
+
+
+_lock_handle = acquire_lock(CLINIC_ID)
 
 try:
     role = Role.objects.get(label=f'role_{CLINIC_ID}')
@@ -65,6 +85,7 @@ def add_to_cabinet_with_acl(document, cabinet):
         *StoredPermission.objects.filter(name__in=DOCUMENT_PERMISSIONS)
     )
 
+
 def register_via_hardlink(filepath, filename, document):
     file_uuid = str(uuid.uuid4())
     dest_path = os.path.join(MAYAN_STORAGE, file_uuid)
@@ -77,8 +98,6 @@ def register_via_hardlink(filepath, filename, document):
     try:
         os.chown(dest_path, 1000, 1000)
     except PermissionError:
-        # Скрипт запускається не з root — chown неможливий, залишаємо
-        # як є і попереджаємо в лог, щоб не приховувати проблему.
         print(f'[WARNING] Не вдалось змінити власника {dest_path} — '
               f'запусти import_clinic.py з правами root')
 
@@ -121,6 +140,12 @@ def import_file(filepath, cabinet):
     if not filename:
         return
 
+    if not os.path.exists(filepath):
+        # Файл міг зникнути між os.listdir() і обробкою (наприклад,
+        # видалений паралельним процесом чи повторним запуском).
+        print(f'[SKIP] {filename} — файл вже не існує (оброблено раніше?)', flush=True)
+        return
+
     checksum = sha256_file(filepath)
     existing_file = DocumentFile.objects.filter(checksum=checksum).first()
 
@@ -136,7 +161,8 @@ def import_file(filepath, cabinet):
             counter['linked'] += 1
             print(f'[LINK] {filename} → існуючий документ pk:{document.pk}', flush=True)
 
-        os.remove(filepath)
+        if os.path.exists(filepath):
+            os.remove(filepath)
         return
 
     document  = None
@@ -193,7 +219,6 @@ def cleanup_empty_dirs(path):
             if not os.listdir(dirpath):
                 os.rmdir(dirpath)
                 print(f'[RMDIR] {dirpath}')
-    # Видаляємо основну папку якщо порожня
     if os.path.isdir(path) and not os.listdir(path):
         os.rmdir(path)
         print(f'[RMDIR] {path}')
@@ -231,10 +256,8 @@ def main():
     print(f'\n=== {CLINIC_ID} ЗАВЕРШЕНО ===', flush=True)
     print(f'OK: {counter["ok"]} | LINK: {counter["linked"]} | SKIP: {counter["skip"]} | ERROR: {counter["error"]}')
 
-    # Завжди видаляємо порожні папки після імпорту
     print(f'\n[CLEANUP] Видаляємо порожні папки...', flush=True)
     cleanup_empty_dirs(CLINIC_DIR)
 
 
 main()
-
