@@ -1,12 +1,13 @@
 #!/bin/bash
 # sync_clients.sh — синхронізація клієнтів 1000-9999 (→ 01000-09999 в Mayan)
 #
-# Нова логіка (checksum-first):
+# Логіка (checksum-first):
 #   1. Будуємо карту (checksum, шлях) файлів клієнта на remote хостах через
 #      ssh + sha256sum — БЕЗ завантаження, тільки хеш обчислюється на remote.
 #   2. Звіряємо карту з базою Mayan. Якщо checksum вже є — лінкуємо документ
-#      у кабінет клієнта миттєво, без rsync.
-#   3. rsync --files-from ТІЛЬКИ файлів, яких реально бракує.
+#      у кабінет клієнта миттєво, без rsync (див. приклад: клієнт бачить файл,
+#      що вже завантажений клінікою, без дублювання на диску).
+#   3. rsync ТІЛЬКИ файлів, яких реально бракує.
 #   4. Сортування по роках + import_clinic.py для щойно завантажених файлів.
 #
 # Використання:
@@ -59,7 +60,11 @@ done
 # ─── Функції ─────────────────────────────────────────────────────────────────
 
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+    # >&2 — критично: не даємо log() потрапляти в stdout функцій, чиє
+    # значення захоплюється через $(...) (build_client_map тощо), інакше
+    # весь текст логу підмішується в змінну і bash намагається виконати
+    # його як команду.
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE" >&2
 }
 
 to_mayan_id() {
@@ -67,8 +72,7 @@ to_mayan_id() {
 }
 
 # Будує карту checksum для клієнта з одного хоста (всі REMOTE_PATHS для нього).
-# Хеш рахується НА remote хості (sha256sum), по мережі йде тільки текст —
-# файли не завантажуються на цьому кроці.
+# Хеш рахується НА remote хості (sha256sum) — по мережі йдуть тільки хеші+шляхи.
 build_map_from_host() {
     local HOST="$1"
     local CLIENT_ID="$2"
@@ -81,13 +85,11 @@ build_map_from_host() {
             continue
         fi
         log "  [MAP] ${HOST}:${REMOTE_DIR} (sha256 на remote)"
-        # find + sha256sum виконуються НА remote хості — тільки хеші йдуть по мережі
         ssh -o ConnectTimeout=5 "$HOST" \
             "find '$REMOTE_DIR' -type f -exec sha256sum {} +" 2>/dev/null | \
         while IFS= read -r out_line; do
             checksum="${out_line%%  *}"
             remote_path="${out_line#*  }"
-            # Відносний шлях (для збереження структури рік/файл при rsync)
             rel_path="${remote_path#$REMOTE_DIR/}"
             printf '%s\t%s\t%s\t%s\t%s\n' \
                 "$checksum" "$HOST" "$REMOTE_DIR" "$remote_path" "$rel_path"
@@ -95,7 +97,8 @@ build_map_from_host() {
     done
 }
 
-# Повна карта клієнта з обох хостів
+# Повна карта клієнта з обох хостів. echo лише шлях до файлу — уся
+# інша інформація (log) іде через stderr, тому $(...) захоплює чистий шлях.
 build_client_map() {
     local CLIENT_ID="$1"
     local MAYAN_ID="$2"
@@ -113,66 +116,57 @@ build_client_map() {
     echo "$MAP_FILE"
 }
 
-# Звіряємо карту з Mayan, лінкуємо існуючі, отримуємо список на завантаження
+# Звіряємо карту з Mayan, лінкуємо існуючі, отримуємо список на завантаження.
+# echo — тільки шлях до DOWNLOAD_LIST. Виставляє глобальні _LINK_SUMMARY_*.
 link_and_get_download_list() {
     local MAYAN_ID="$1"
     local MAP_FILE="$2"
     local DOWNLOAD_LIST="$MAP_DIR/${MAYAN_ID}.need_download"
+    local LINK_LOG="$MAP_DIR/${MAYAN_ID}.link.log"
 
     log "  [LINK] Звіряємо checksum з Mayan..."
     docker exec -i "$MAYAN_CONTAINER" "$MAYAN_PYTHON" "$MAYAN_LINK" "$MAYAN_ID" \
-        < "$MAP_FILE" > "$DOWNLOAD_LIST" 2> >(tee -a "$LOG_FILE" >&2)
+        < "$MAP_FILE" > "$DOWNLOAD_LIST" 2> "$LINK_LOG"
 
-    local need
-    need=$(wc -l < "$DOWNLOAD_LIST")
-    log "  [LINK] Потрібно завантажити: $need файлів"
+    while IFS= read -r line; do log "  $line"; done < "$LINK_LOG"
+
+    local summary_line
+    summary_line=$(grep '^\[SUMMARY\]' "$LINK_LOG" | tail -1)
+    _LINK_SUMMARY_LINKED=$(echo "$summary_line" | grep -oP 'linked=\K[0-9]+' || echo 0)
+    _LINK_SUMMARY_NEED=$(echo "$summary_line" | grep -oP 'need_download=\K[0-9]+' || echo 0)
+    _LINK_SUMMARY_ERRORS=$(echo "$summary_line" | grep -oP 'errors=\K[0-9]+' || echo 0)
+
     echo "$DOWNLOAD_LIST"
 }
 
-# rsync тільки файлів зі списку need_download, згрупованих по host+remote_root
+# rsync тільки файлів зі списку need_download. Виставляє _DOWNLOAD_OK/_DOWNLOAD_FAIL.
 download_needed_files() {
     local MAYAN_ID="$1"
     local DOWNLOAD_LIST="$2"
     local LOCAL_DIR="$LOCAL_BASE/$MAYAN_ID"
     mkdir -p "$LOCAL_DIR"
 
-    [ -s "$DOWNLOAD_LIST" ] || { log "  [RSYNC] Нема файлів для завантаження"; return; }
+    _DOWNLOAD_OK=0
+    _DOWNLOAD_FAIL=0
 
-    # Групуємо по host (remote_root вже частина relative_path через find,
-    # тому rsync --files-from працює відносно host:/ і потребує relative
-    # шляхів БЕЗ спільного кореня між різними REMOTE_PATHS — обробляємо
-    # по одному host+root за раз)
-    local TMP_FILES
-    TMP_FILES=$(mktemp -d)
+    if [ ! -s "$DOWNLOAD_LIST" ]; then
+        log "  [RSYNC] Нема файлів для завантаження"
+        return
+    fi
 
-    # Витягуємо унікальні пари host+remote_path з download-листа і будуємо
-    # files-from списки згруповані по host (remote_path вже абсолютний,
-    # rsync --files-from підтримує абсолютні шляхи з host: напряму)
-    awk -F'\t' '{print $1}' "$DOWNLOAD_LIST" | sort -u | while read -r HOST; do
-        awk -F'\t' -v h="$HOST" '$1==h {print $2}' "$DOWNLOAD_LIST" \
-            > "$TMP_FILES/${HOST//[^a-zA-Z0-9]/_}.list"
-    done
-
-    for FLIST in "$TMP_FILES"/*.list; do
-        [ -s "$FLIST" ] || continue
-        HOST=$(awk -F'\t' -v f="$FLIST" 'BEGIN{split(f,a,"/"); n=split(a[length(a)],b,"."); print b[1]}')
-        # Простіше й надійніше — rsync кожен файл окремо з абсолютним шляхом
-        while IFS= read -r RPATH; do
-            local_target="$LOCAL_DIR/$(basename "$RPATH")"
-            log "  [RSYNC] $RPATH"
-        done < "$FLIST"
-    done
-
-    # Практичний і надійний варіант: rsync по одному файлу через список
-    # host<TAB>remote_path<TAB>relative_path, зберігаючи структуру папок
     while IFS=$'\t' read -r HOST RPATH RELPATH; do
         DEST="$LOCAL_DIR/$RELPATH"
         mkdir -p "$(dirname "$DEST")"
-        rsync -a --no-perms --omit-dir-times -e "ssh -o ConnectTimeout=5" \
-            "${HOST}:${RPATH}" "$DEST" 2>&1 | tee -a "$LOG_FILE"
+        if rsync -a --no-perms --omit-dir-times -e "ssh -o ConnectTimeout=5" \
+            "${HOST}:${RPATH}" "$DEST" 2>&1 | tee -a "$LOG_FILE"; then
+            _DOWNLOAD_OK=$((_DOWNLOAD_OK + 1))
+        else
+            _DOWNLOAD_FAIL=$((_DOWNLOAD_FAIL + 1))
+            log "  [RSYNC ERROR] $HOST:$RPATH"
+        fi
     done < "$DOWNLOAD_LIST"
 
-    rm -rf "$TMP_FILES"
+    log "  [RSYNC] Завантажено: $_DOWNLOAD_OK | Помилок: $_DOWNLOAD_FAIL"
 }
 
 sort_by_year() {
@@ -198,13 +192,26 @@ sort_by_year() {
     [ $moved -gt 0 ] && log "  [SORT] Переміщено файлів: $moved"
 }
 
+# Імпорт в Mayan. Виставляє глобальні _IMPORT_OK/_IMPORT_LINK/_IMPORT_SKIP/_IMPORT_ERROR
 import_to_mayan() {
     local MAYAN_ID="$1"
     log "  [IMPORT] $MAYAN_ID → Mayan"
-    docker exec "$MAYAN_CONTAINER" \
-        "$MAYAN_PYTHON" "$MAYAN_SCRIPT" "$MAYAN_ID" 2>&1 | tee -a "$LOG_FILE"
+
+    local IMPORT_LOG
+    IMPORT_LOG=$(docker exec "$MAYAN_CONTAINER" \
+        "$MAYAN_PYTHON" "$MAYAN_SCRIPT" "$MAYAN_ID" 2>&1 | tee -a "$LOG_FILE")
+
+    local stats_line
+    stats_line=$(echo "$IMPORT_LOG" | grep -oP 'OK: \d+ \| LINK: \d+ \| SKIP: \d+ \| ERROR: \d+' | tail -1)
+
+    _IMPORT_OK=$(echo "$stats_line"    | grep -oP 'OK: \K[0-9]+'    || echo 0)
+    _IMPORT_LINK=$(echo "$stats_line"  | grep -oP 'LINK: \K[0-9]+'  || echo 0)
+    _IMPORT_SKIP=$(echo "$stats_line"  | grep -oP 'SKIP: \K[0-9]+'  || echo 0)
+    _IMPORT_ERROR=$(echo "$stats_line" | grep -oP 'ERROR: \K[0-9]+' || echo 0)
 }
 
+# Повна обробка одного клієнта. MAP_TOTAL і _* — НЕ local, щоб зовнішній
+# цикл (cron-режим) міг підсумувати їх у загальну статистику.
 process_client() {
     local CLIENT_ID="$1"
     local MAYAN_ID
@@ -212,15 +219,30 @@ process_client() {
 
     log "=== Клієнт: $CLIENT_ID → $MAYAN_ID ==="
 
+    MAP_TOTAL=0
+    _LINK_SUMMARY_LINKED=0; _LINK_SUMMARY_NEED=0; _LINK_SUMMARY_ERRORS=0
+    _DOWNLOAD_OK=0; _DOWNLOAD_FAIL=0
+    _IMPORT_OK=0; _IMPORT_LINK=0; _IMPORT_SKIP=0; _IMPORT_ERROR=0
+
     if $DO_RSYNC; then
         local MAP_FILE DOWNLOAD_LIST
         MAP_FILE=$(build_client_map "$CLIENT_ID" "$MAYAN_ID")
+        MAP_TOTAL=$(wc -l < "$MAP_FILE")
+
         DOWNLOAD_LIST=$(link_and_get_download_list "$MAYAN_ID" "$MAP_FILE")
         download_needed_files "$MAYAN_ID" "$DOWNLOAD_LIST"
     fi
 
     sort_by_year "$LOCAL_BASE/$MAYAN_ID"
     import_to_mayan "$MAYAN_ID"
+
+    log "  ────────────────────────────────────────"
+    log "  ПІДСУМОК $CLIENT_ID → $MAYAN_ID:"
+    log "    Карта:        $MAP_TOTAL файлів (усі хости разом)"
+    log "    Лінк (dup):   $_LINK_SUMMARY_LINKED | помилок лінку: $_LINK_SUMMARY_ERRORS"
+    log "    Завантажено:  $_DOWNLOAD_OK | помилок rsync: $_DOWNLOAD_FAIL"
+    log "    Імпорт:       OK=$_IMPORT_OK LINK=$_IMPORT_LINK SKIP=$_IMPORT_SKIP ERROR=$_IMPORT_ERROR"
+    log "  ────────────────────────────────────────"
 }
 
 sync_from_mysql() {
@@ -261,9 +283,33 @@ if [ -z "$NEW_CLIENTS" ]; then
     exit 0
 fi
 
+TOTAL_MAP=0
+TOTAL_LINKED=0
+TOTAL_DOWNLOADED=0
+TOTAL_IMPORT_OK=0
+TOTAL_IMPORT_ERROR=0
+TOTAL_CLIENTS=0
+
 while IFS=: read -r _ CLIENT_ID MAYAN_ID; do
     [ -n "$CLIENT_ID" ] || continue
     process_client "$CLIENT_ID"
+
+    TOTAL_CLIENTS=$((TOTAL_CLIENTS + 1))
+    TOTAL_MAP=$((TOTAL_MAP + MAP_TOTAL))
+    TOTAL_LINKED=$((TOTAL_LINKED + _LINK_SUMMARY_LINKED))
+    TOTAL_DOWNLOADED=$((TOTAL_DOWNLOADED + _DOWNLOAD_OK))
+    TOTAL_IMPORT_OK=$((TOTAL_IMPORT_OK + _IMPORT_OK))
+    TOTAL_IMPORT_ERROR=$((TOTAL_IMPORT_ERROR + _IMPORT_ERROR))
 done <<< "$NEW_CLIENTS"
 
+log ""
+log "═══════════════════════════════════════════════"
+log "  ЗАГАЛЬНИЙ ПІДСУМОК"
+log "  Клієнтів оброблено: $TOTAL_CLIENTS"
+log "  Файлів у картах:    $TOTAL_MAP"
+log "  Лінковано (dup):    $TOTAL_LINKED"
+log "  Завантажено:        $TOTAL_DOWNLOADED"
+log "  Імпорт OK:          $TOTAL_IMPORT_OK"
+log "  Імпорт ERROR:       $TOTAL_IMPORT_ERROR"
+log "═══════════════════════════════════════════════"
 log "=== СИНХРОНІЗАЦІЯ ЗАВЕРШЕНА ==="

@@ -2,18 +2,11 @@
 """
 link_or_prepare_download.py — звіряє карту (checksum, host, remote_path)
 з базою Mayan. Для checksum, що вже існує в Mayan — одразу лінкує документ
-у кабінет клієнта (без завантаження файлу). Для решти — виводить список
-"host<TAB>remote_path<TAB>local_relative_path" для подальшого rsync.
+у відповідний підкабінет клієнта (MAYAN_ID/рік, за rel_path), без завантаження.
+Для решти — виводить список на довантаження.
 
-Вхід (stdin), формат TSV, одна строка на файл:
-    checksum<TAB>host<TAB>remote_root<TAB>remote_path<TAB>relative_path
-
-Використання:
-    cat map.tsv | docker exec -i mayan-app-1 python3 \
-        /var/lib/mayan/link_or_prepare_download.py 01001
-
-Вивід (stdout): рядки need_download у форматі
-    host<TAB>remote_path<TAB>relative_path
+Вхід (stdin), TSV: checksum<TAB>host<TAB>remote_root<TAB>remote_path<TAB>relative_path
+Вивід (stdout): need_download рядки host<TAB>remote_path<TAB>relative_path
 """
 import os, sys, django
 
@@ -21,7 +14,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mayan.settings.production')
 django.setup()
 
 from django.contrib.contenttypes.models import ContentType
-from mayan.apps.documents.models import DocumentFile
+from mayan.apps.documents.models import Document, DocumentFile
 from mayan.apps.cabinets.models import Cabinet
 from mayan.apps.acls.models import AccessControlList
 from mayan.apps.permissions.models import StoredPermission, Role
@@ -42,14 +35,30 @@ except Role.DoesNotExist:
     print(f'[ERROR] role_{MAYAN_ID} not found', file=sys.stderr)
     sys.exit(1)
 
-cabinet, _ = Cabinet.objects.get_or_create(label=MAYAN_ID)
-doc_ct = ContentType.objects.get_for_model(cabinet.__class__)  # placeholder, замінено нижче
-
-from mayan.apps.documents.models import Document
+root_cabinet, _ = Cabinet.objects.get_or_create(label=MAYAN_ID)
 doc_ct = ContentType.objects.get_for_model(Document)
 
+_year_cabinet_cache = {}
 
-def link_existing(document):
+
+def get_year_cabinet(rel_path):
+    """
+    Визначає підкабінет за роком з relative_path (перша частина шляху,
+    якщо вона 4-значна цифра — це рік, як в import_clinic.py). Якщо
+    файл лежить у корені (без підпапки року) — повертає кореневий кабінет.
+    """
+    parts = rel_path.split('/', 1)
+    if len(parts) > 1 and parts[0].isdigit() and len(parts[0]) == 4:
+        year = parts[0]
+        if year not in _year_cabinet_cache:
+            _year_cabinet_cache[year], _ = Cabinet.objects.get_or_create(
+                label=year, parent=root_cabinet
+            )
+        return _year_cabinet_cache[year]
+    return root_cabinet
+
+
+def link_existing(document, cabinet):
     cabinet.documents.add(document)
     acl, _ = AccessControlList.objects.get_or_create(
         content_type=doc_ct, object_id=document.pk, role=role,
@@ -78,15 +87,16 @@ for line in sys.stdin:
 
     if existing:
         document = existing.document
+        cabinet = get_year_cabinet(rel_path)
+
         already = cabinet.documents.filter(pk=document.pk).exists()
         if not already:
-            link_existing(document)
-            print(f'[LINK] {rel_path} -> pk:{document.pk}', file=sys.stderr)
+            link_existing(document, cabinet)
+            print(f'[LINK] {rel_path} -> pk:{document.pk} (кабінет: {cabinet.label} / {cabinet.parent.label if cabinet.parent else "корінь"})', file=sys.stderr)
             linked += 1
         else:
-            print(f'[SKIP] {rel_path} вже в кабінеті', file=sys.stderr)
+            print(f'[SKIP] {rel_path} вже в кабінеті {cabinet.label}', file=sys.stderr)
     else:
-        # Потрібне завантаження — виводимо в stdout для rsync
         print(f'{host}\t{remote_path}\t{rel_path}')
         need_download += 1
 
