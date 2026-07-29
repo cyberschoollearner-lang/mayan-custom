@@ -1941,6 +1941,8 @@ print('Юзерів:', User.objects.count())
 docker exec mayan-app-1 /opt/mayan-edms/bin/mayan-edms.py search_reindex
 
 # Очистка storage від файлів без документів
+
+# Підрахунок файлів.
 find /mnt/cephfs/mayan/document_storage -type f | wc -l
 ```
 ---
