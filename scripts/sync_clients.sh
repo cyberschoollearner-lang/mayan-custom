@@ -18,15 +18,21 @@
 #   ./sync_clients.sh --import-only      # тільки імпорт існуючих локальних файлів
 
 # ─── Конфіг ──────────────────────────────────────────────────────────────────
-REMOTE_HOST1="xxx.xxx.xxx.5"
+REMOTE_HOST1="yyy.yyy.yyy.5"
 REMOTE_PATHS1=(
     "/var/snap/public"
-    "/var/snap/yyy.yyy.yyy.yyy/new/public"
-    "/var/snap/yyy.yyy.yyy.yyy/public"
+    "/var/snap/xxx.xxx.xxx.55/new/public"
+    "/var/snap/xxx.xxx.xxx.55/public"
 )
 
-REMOTE_HOST2="zzz.zzz.zzz.55"
+# Хост 2 і шляхи
+REMOTE_HOST2="xxx.xxx.xxx.60"
 REMOTE_PATHS2=(
+    "/public"
+    "/backup/public"
+)
+REMOTE_HOST3="xxx.xxx.xxx.61"
+REMOTE_PATHS3=(
     "/public"
     "/backup/public"
 )
@@ -120,7 +126,11 @@ build_map_from_host() {
 
 # Визначає доступну команду sha256 на remote хості (GNU sha256sum або BSD sha256)
 # і повертає нормалізовану команду, що завжди видає GNU-подібний формат
-# "хеш  шлях" через sed, незалежно від того, яка утиліта реально є на хостіe
+# "хеш  шлях" через sed, незалежно від того, яка утиліта реально є на хості.
+# Визначає доступну команду sha256 на remote хості. Примусово запускаємо
+# через `sh -c` — на частині хостів дефолтний shell csh/tcsh, який не
+# підтримує bash-синтаксис редіректів (2>&1), звідси "Ambiguous output
+# redirect" при прямому виконанні через ssh без обгортки.
 get_remote_hash_cmd() {
     local HOST="$1"
     if ssh -o ConnectTimeout=5 "$HOST" "sh -c 'command -v sha256sum'" >/dev/null 2>&1; then
@@ -143,6 +153,7 @@ build_client_map() {
     {
         build_map_from_host "$REMOTE_HOST1" "$CLIENT_ID" "${REMOTE_PATHS1[@]}"
         build_map_from_host "$REMOTE_HOST2" "$CLIENT_ID" "${REMOTE_PATHS2[@]}"
+        build_map_from_host "$REMOTE_HOST3" "$CLIENT_ID" "${REMOTE_PATHS3[@]}"
     } > "$MAP_FILE"
 
     local total
@@ -170,8 +181,8 @@ link_and_get_download_list() {
     _LINK_SUMMARY_LINKED=$(echo "$summary_line" | grep -oP 'linked=\K[0-9]+' || echo 0)
     _LINK_SUMMARY_NEED=$(echo "$summary_line" | grep -oP 'need_download=\K[0-9]+' || echo 0)
     _LINK_SUMMARY_ERRORS=$(echo "$summary_line" | grep -oP 'errors=\K[0-9]+' || echo 0)
-
-    echo "$DOWNLOAD_LIST"
+    # ВАЖЛИВО: жодного echo шляху в кінці — функцію викликаємо напряму,
+    # не через $(...), інакше всі присвоєння вище знову загубляться.
 }
 
 # rsync тільки файлів зі списку need_download. Виставляє _DOWNLOAD_OK/_DOWNLOAD_FAIL.
@@ -239,10 +250,14 @@ import_to_mayan() {
     local stats_line
     stats_line=$(echo "$IMPORT_LOG" | grep -oP 'OK: \d+ \| LINK: \d+ \| SKIP: \d+ \| ERROR: \d+' | tail -1)
 
-    _IMPORT_OK=$(echo "$stats_line"    | grep -oP 'OK: \K[0-9]+'    || echo 0)
-    _IMPORT_LINK=$(echo "$stats_line"  | grep -oP 'LINK: \K[0-9]+'  || echo 0)
-    _IMPORT_SKIP=$(echo "$stats_line"  | grep -oP 'SKIP: \K[0-9]+'  || echo 0)
-    _IMPORT_ERROR=$(echo "$stats_line" | grep -oP 'ERROR: \K[0-9]+' || echo 0)
+    #_IMPORT_OK=$(echo "$stats_line"    | grep -oP 'OK: \K[0-9]+'    || echo 0)
+    _IMPORT_OK=$(echo "$stats_line"    | sed -n 's/.*OK: \([0-9]*\).*/\1/p')
+    #_IMPORT_LINK=$(echo "$stats_line"  | grep -oP 'LINK: \K[0-9]+'  || echo 0)
+    _IMPORT_LINK=$(echo "$stats_line"  | sed -n 's/.*LINK: \([0-9]*\).*/\1/p')
+    #_IMPORT_SKIP=$(echo "$stats_line"  | grep -oP 'SKIP: \K[0-9]+'  || echo 0)
+    _IMPORT_SKIP=$(echo "$stats_line"  | sed -n 's/.*SKIP: \([0-9]*\).*/\1/p')
+    #_IMPORT_ERROR=$(echo "$stats_line" | grep -oP 'ERROR: \K[0-9]+' || echo 0)
+    _IMPORT_ERROR=$(echo "$stats_line" | sed -n 's/.*ERROR: \([0-9]*\).*/\1/p')
 }
 
 # Повна обробка одного клієнта. MAP_TOTAL і _* — НЕ local, щоб зовнішній
@@ -260,11 +275,12 @@ process_client() {
     _IMPORT_OK=0; _IMPORT_LINK=0; _IMPORT_SKIP=0; _IMPORT_ERROR=0
 
     if $DO_RSYNC; then
-        local MAP_FILE DOWNLOAD_LIST
+        local MAP_FILE
         MAP_FILE=$(build_client_map "$CLIENT_ID" "$MAYAN_ID")
         MAP_TOTAL=$(wc -l < "$MAP_FILE")
 
-        DOWNLOAD_LIST=$(link_and_get_download_list "$MAYAN_ID" "$MAP_FILE")
+        local DOWNLOAD_LIST="$MAP_DIR/${MAYAN_ID}.need_download"
+        link_and_get_download_list "$MAYAN_ID" "$MAP_FILE"
         download_needed_files "$MAYAN_ID" "$DOWNLOAD_LIST"
     fi
 
