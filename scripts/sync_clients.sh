@@ -79,14 +79,35 @@ build_map_from_host() {
     shift 2
     local PATHS=("$@")
 
+    local HASH_CMD
+    HASH_CMD=$(get_remote_hash_cmd "$HOST")
+
+    if [ -z "$HASH_CMD" ]; then
+        log "  [MAP ERROR] ${HOST}: не знайдено ні sha256sum, ні sha256 — пропускаю хост"
+        return
+    fi
+
     for RPATH in "${PATHS[@]}"; do
         REMOTE_DIR="${RPATH}/${CLIENT_ID}"
-        if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$HOST" "[ -d '$REMOTE_DIR' ]" 2>/dev/null; then
+
+        if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$HOST" \
+             "sh -c '[ -d \"$REMOTE_DIR\" ]'" 2>/dev/null; then
             continue
         fi
-        log "  [MAP] ${HOST}:${REMOTE_DIR} (sha256 на remote)"
-        ssh -o ConnectTimeout=5 "$HOST" \
-            "find '$REMOTE_DIR' -type f -exec sha256sum {} +" 2>/dev/null | \
+
+        local real_count
+        real_count=$(ssh -o ConnectTimeout=5 "$HOST" \
+            "sh -c \"find '$REMOTE_DIR' -type f 2>/dev/null | wc -l\"")
+        log "  [MAP] ${HOST}:${REMOTE_DIR} — файлів на хості: $real_count (хеш: $HASH_CMD)"
+
+        if [ "$HASH_CMD" = "sha256sum" ]; then
+            ssh -o ConnectTimeout=5 "$HOST" \
+                "sh -c \"find '$REMOTE_DIR' -type f -exec sha256sum {} +\"" 2>/dev/null
+        else
+            ssh -o ConnectTimeout=5 "$HOST" \
+                "sh -c \"find '$REMOTE_DIR' -type f -exec sha256 {} +\"" 2>/dev/null | \
+                sed -E 's/^SHA256 \((.*)\) = ([0-9a-f]+)$/\2  \1/'
+        fi | \
         while IFS= read -r out_line; do
             checksum="${out_line%%  *}"
             remote_path="${out_line#*  }"
@@ -95,6 +116,20 @@ build_map_from_host() {
                 "$checksum" "$HOST" "$REMOTE_DIR" "$remote_path" "$rel_path"
         done
     done
+}
+
+# Визначає доступну команду sha256 на remote хості (GNU sha256sum або BSD sha256)
+# і повертає нормалізовану команду, що завжди видає GNU-подібний формат
+# "хеш  шлях" через sed, незалежно від того, яка утиліта реально є на хостіe
+get_remote_hash_cmd() {
+    local HOST="$1"
+    if ssh -o ConnectTimeout=5 "$HOST" "sh -c 'command -v sha256sum'" >/dev/null 2>&1; then
+        echo "sha256sum"
+    elif ssh -o ConnectTimeout=5 "$HOST" "sh -c 'command -v sha256'" >/dev/null 2>&1; then
+        echo "sha256_bsd"
+    else
+        echo ""
+    fi
 }
 
 # Повна карта клієнта з обох хостів. echo лише шлях до файлу — уся
