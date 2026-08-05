@@ -2739,10 +2739,12 @@ wait
 
 ```bash
 # Максимальний строк зберігання (років)
-export MAX_RETENTION_YEARS=5   # 2026-5=2021, видаляємо папки < 2021
+# MAX_RETENTION_YEARS=5   # 2026-5=2021, видаляємо папки < 2021
+docker exec -e MAX_RETENTION_YEARS=5  mayan-app-1 /opt/mayan-edms/bin/python /var/lib/mayan/rotate_cabinets.py --run
 
 # Затримка перед видаленням архіву (днів)
-export ARCHIVE_DELETE_AFTER_DAYS=30
+# ARCHIVE_DELETE_AFTER_DAYS=30
+docker exec -e ARCHIVE_DELETE_AFTER_DAYS=30  mayan-app-1 /opt/mayan-edms/bin/python /var/lib/mayan/rotate_cabinets.py --cleanup
 ```
 
 ### `/mnt/cephfs/mayan/rotate_cabinets.py`

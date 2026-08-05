@@ -201,23 +201,22 @@ def archive_old_cabinet(cabinet, dry_run=False):
         counter['errors'] += 1
         log(f'  [ERROR] archive {cabinet.label}: {e}')
 
-
-def process_cabinet(root_cabinet, dry_run=False):
-    """Обробляє один кореневий кабінет."""
+def process_cabinet(root_cabinet, dry_run=False, year_filter=None):
+    """Обробляє один кореневий кабінет. year_filter — якщо задано,
+    обробляє тільки цей конкретний рік (документи + підкабінет)."""
     cabinet_label = root_cabinet.label
     log(f'\n=== Кабінет: {cabinet_label} ===')
 
     # 1. Переміщуємо файли з кореня кабінету в підпапки по роках
     root_docs = root_cabinet.documents.all()
     for document in root_docs:
-        # Визначаємо рік документа
         doc_year = document.datetime_created.year if document.datetime_created else CURRENT_YEAR
 
-        # Поточний рік — не чіпаємо
         if doc_year == CURRENT_YEAR:
             continue
+        if year_filter is not None and doc_year != year_filter:
+            continue
 
-        # Створюємо підкабінет року
         year_cabinet = get_or_create_year_cabinet(root_cabinet, doc_year, dry_run)
         if year_cabinet or dry_run:
             move_document_to_year(document, root_cabinet, year_cabinet, dry_run)
@@ -228,6 +227,8 @@ def process_cabinet(root_cabinet, dry_run=False):
         if not sub.label.isdigit():
             continue
         year = int(sub.label)
+        if year_filter is not None and year != year_filter:
+            continue
         if year < MIN_YEAR:
             archive_old_cabinet(sub, dry_run)
 
@@ -240,20 +241,15 @@ def process_cabinet(root_cabinet, dry_run=False):
         if not sub.label.isdigit():
             continue
         year = int(sub.label)
+        if year_filter is not None and year != year_filter:
+            continue
         if year >= MIN_YEAR:
             continue
 
         log(f'  Обробка старого підкабінету: {sub.label} (< {MIN_YEAR})')
-        is_client = bool(
-            root_cabinet.label.startswith('0') and
-            len(root_cabinet.label) == 5 and
-            root_cabinet.label[1:].isdigit()
-        )
-
         for document in sub.documents.all():
             link = is_link(document, cabinet_label)
             remove_document_from_cabinet(document, sub, is_link_doc=link, dry_run=dry_run)
-
 
 def cleanup_archives(dry_run=False):
     """Видаляє _archive кабінети старші за ARCHIVE_DELETE_AFTER_DAYS."""
@@ -321,6 +317,8 @@ def get_cabinets_ordered():
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def main():
+    global MAX_RETENTION_YEARS, MIN_YEAR
+
     parser = argparse.ArgumentParser(
         description='Ротація файлів по роках в кабінетах Mayan EDMS'
     )
@@ -333,7 +331,6 @@ def main():
     parser.add_argument('--retention',type=int,            help=f'Максимальний строк зберігання в роках (default: {MAX_RETENTION_YEARS})')
     args = parser.parse_args()
 
-    global MAX_RETENTION_YEARS, MIN_YEAR
     if args.retention:
         MAX_RETENTION_YEARS = args.retention
         MIN_YEAR = CURRENT_YEAR - MAX_RETENTION_YEARS
@@ -353,18 +350,16 @@ def main():
 
     elif args.run or args.test:
         if args.cabinet:
-            # Один кабінет
             cab = Cabinet.objects.filter(label=args.cabinet, parent=None).first()
             if not cab:
                 print(f'[ERROR] Кабінет {args.cabinet} не знайдено')
                 sys.exit(1)
-            process_cabinet(cab, dry_run=dry_run)
+            process_cabinet(cab, dry_run=dry_run, year_filter=args.year)
         else:
-            # Всі кабінети в правильному порядку
             cabinets = get_cabinets_ordered()
             print(f'Кабінетів для обробки: {len(cabinets)}')
             for cab in cabinets:
-                process_cabinet(cab, dry_run=dry_run)
+                process_cabinet(cab, dry_run=dry_run, year_filter=args.year)
 
     else:
         parser.print_help()
