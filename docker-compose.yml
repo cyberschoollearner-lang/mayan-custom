@@ -42,6 +42,7 @@ x-mayan-environment:
   MAYAN_LOCK_MANAGER_BACKEND_ARGUMENTS: "{'redis_url':'redis://:${MAYAN_REDIS_PASSWORD:-mayanredispassword}@${MAYAN_DOCKER_REDIS_HOSTNAME:-redis}:${MAYAN_DOCKER_REDIS_PORT:-6379}/${MAYAN_REDIS_LOCK_MANAGER_DATABASE:-2}'}"
   MAYAN_COMMON_EXTRA_APPS: "['custom.apps.CustomConfig']"
   MAYAN_AUTHENTICATION_BACKEND: "mayan.apps.authentication_otp.authentication_backends.AuthenticationBackendModelUsernamePasswordTOTP"
+  MAYAN_DJANGO_CSRF_TRUSTED_ORIGINS: "https://kt.hyundai-club.kiev.ua,http://localhost:8000,http://172.16.0.253"
 
 x-mayan-container:
   &mayan-container
@@ -200,7 +201,7 @@ services:
     profiles:
       - postgresql
     restart: unless-stopped
-    shm_size: 128m
+    shm_size: 1024m
     volumes:
       - ${MAYAN_POSTGRESQL_VOLUME:-postgres}:/var/lib/postgresql/data
       - ${MAYAN_POSTGRESQL_VOLUME_INITDB:-postgres-initdb}:/docker-entrypoint-initdb.d/

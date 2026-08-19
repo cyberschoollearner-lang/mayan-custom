@@ -10,6 +10,7 @@ class CustomConfig(MayanAppConfig):
     def ready(self):
         super().ready()
         import custom.signals  # noqa
+        import custom.settings  # noqa — реєструє CUSTOM_MAX_RETENTION_YEARS, CUSTOM_ARCHIVE_DELETE_AFTER_DAYS, CUSTOM_EDIT_WINDOW_HOURS
         self._remove_columns()
         self._remove_duplicate_backend_label()
         self._ensure_storage_permissions()
