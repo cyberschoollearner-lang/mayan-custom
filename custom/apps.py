@@ -14,6 +14,8 @@ class CustomConfig(MayanAppConfig):
         self._remove_columns()
         self._remove_duplicate_backend_label()
         self._ensure_storage_permissions()
+        self._restrict_menus_for_clients()
+        self._force_list_mode_default()
 
     def _remove_columns(self):
         try:
@@ -87,7 +89,114 @@ class CustomConfig(MayanAppConfig):
                     )
             except FileNotFoundError:
                 pass
+				
+    def _restrict_menus_for_clients(self):
+    	"""
+    	Приховує menu_object (Actions-дропдаун на одному документі) і
+    	menu_multi_item ("Дії з набором" — bulk actions при виборі чекбоксом)
+    	для клієнтів (01000-09999, 5-значний username). Клініки (0100-0999)
+    	і адмін бачать меню як завжди.
+    	"""
+    	try:
+    		from mayan.apps.common.menus import menu_object, menu_multi_item
+
+    		def make_client_hides_menu(original_condition):
+    			def condition(context, resolved_object=None):
+    				if original_condition and not original_condition(
+    					context=context, resolved_object=resolved_object
+    				):
+    					return False
+
+    				request = context.get('request')
+    				user = getattr(request, 'user', None) if request else None
+    				username = getattr(user, 'username', None)
+
+    				if username and username.isdigit() and len(username) == 5:
+    					return False  # клієнт — ховаємо меню
+
+    				return True
+    			return condition
+
+    		menu_object.condition = make_client_hides_menu(menu_object.condition)
+    		menu_multi_item.condition = make_client_hides_menu(menu_multi_item.condition)
+
+    	except Exception as e:
+    		print(f'[CUSTOM] restrict_menus_for_clients error: {e}')
+
+
+    def _force_list_mode_default(self):
+    	"""
+    	Форсує LIST_MODE_CHOICE_LIST (список) як дефолт для НОВИХ записів
+    	UserViewMode на всіх view, ігноруючи власний default_mode кожного View
+    	(деякі View, як-от Cabinets/Documents, за замовчуванням дефолтять
+    	у плитку). Стосується тільки get_or_create() — якщо запис уже існує
+    	(юзер уже відвідував цей view раніше), його НЕ чіпає.
+    	"""
+    	try:
+    		from mayan.apps.views.view_mixins import ListModeViewMixin
+    		from mayan.apps.views.literals import (
+    			LIST_MODE_CHOICE_LIST, LIST_MODE_CHOICE_ITEM,
+    			TEXT_LIST_AS_ITEMS_VARIABLE_NAME, TEXT_LIST_AS_ITEMS_PARAMETER,
+    		)
+    		from mayan.apps.views.models import UserViewMode
+
+    		original_get_context_data = ListModeViewMixin.get_context_data
+
+    		def patched_get_context_data(self, **kwargs):
+    			context = original_get_context_data(self, **kwargs)
+    			# Якщо форсований режим вже застосувався коректно — нічого
+    			# не робимо. Патч лише міняє default_mode ДО create, тому
+    			# найпростіше — переобчислити самостійно тут:
+    			return context
+
+    		# Прямий патч логіки замість дублювання всього методу:
+    		# підміняємо саму функцію повністю, з форсованим default_mode.
+    		def new_get_context_data(self, **kwargs):
+    			# Викликаємо батьківський клас (минаючи ListModeViewMixin),
+    			# щоб отримати "сирий" контекст без втручання оригінального mixin.
+    			context = super(ListModeViewMixin, self).get_context_data(**kwargs)
+
+    			# ЗАВЖДИ форсуємо список як дефолт для нових записів,
+    			# незалежно від того, що View поклав у TEXT_LIST_AS_ITEMS_VARIABLE_NAME.
+    			default_mode = LIST_MODE_CHOICE_LIST
+
+    			user_list_mode = self.request.GET.get(TEXT_LIST_AS_ITEMS_PARAMETER)
+    			resolver_match = self.request.resolver_match
+    			view_name = '{}:{}'.format(
+    				resolver_match.namespace, resolver_match.url_name
+    			)
+
+    			if user_list_mode:
+    				UserViewMode.objects.update_or_create(
+    					defaults={
+    						'namespace': resolver_match.namespace,
+    						'value': user_list_mode
+    					}, name=view_name, user=self.request.user
+    				)
+    				final_list_mode = user_list_mode
+    			else:
+    				user_view_mode, created = UserViewMode.objects.get_or_create(
+    					defaults={
+    						'namespace': resolver_match.namespace,
+    						'value': default_mode
+    					}, name=view_name, user=self.request.user
+    				)
+    				final_list_mode = user_view_mode.value
+
+    			context.update(
+    				{
+    					TEXT_LIST_AS_ITEMS_VARIABLE_NAME: final_list_mode == LIST_MODE_CHOICE_ITEM
+    				}
+    			)
+    			return context
+
+    		ListModeViewMixin.get_context_data = new_get_context_data
+
+    	except Exception as e:
+    		print(f'[CUSTOM] force_list_mode_default error: {e}')
+		
 
     @classmethod
     def get_template_dirs(cls):
         return [os.path.join(os.path.dirname(__file__), 'templates')]
+
