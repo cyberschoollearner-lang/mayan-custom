@@ -45,9 +45,6 @@ GLOBAL_PERMS = [
     'document_version_view',
     'document_file_download',
     'document_file_print',
-    'message_create',
-    'message_delete',
-    'message_edit',
     'message_view',
 ]
 

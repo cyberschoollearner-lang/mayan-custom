@@ -89,18 +89,12 @@ USERS_RAW = ${PY_USERS}
 PASSWORD  = "${PASSWORD}"
 
 GLOBAL_PERMS = [
-    "document_create",
     "document_type_view",
-    "sources_setup_view",
-    "sources_view",
     "document_view",
     "document_file_view",
     "document_version_view",
     "document_file_download",
     "document_file_print",
-    "message_create",
-    "message_delete",
-    "message_edit",
     "message_view",
 ]
 
