@@ -22,6 +22,7 @@ class CustomConfig(MayanAppConfig):
         self._restrict_menus_for_clients()
         self._force_list_mode_default()
         self._patch_document_click_to_download()
+        self._restrict_left_menu_for_clients()
 
     def _remove_columns(self):
         try:
@@ -396,6 +397,66 @@ class CustomConfig(MayanAppConfig):
             print(
                 f'[CUSTOM] patch_document_click_to_download error: {e}'
             )
+
+    def _restrict_left_menu_for_clients(self):
+        """
+        Для клієнтів (01000-09999, 5-значний username):
+        - menu_documents повністю приховується (весь підменю "Документи")
+        - замість нього прямий Link "Всі документи" без розкриття
+        - menu_cabinets ("Шафи") повністю приховується
+        - "Дублікати" (menu_documents) і "Перевірки" (menu_main) приховуються
+        - додається пункт "Головна" в menu_main
+        Клініки/адмін бачать меню без змін.
+        """
+        try:
+            from mayan.apps.documents.menus import menu_documents
+            from mayan.apps.cabinets.menus import menu_cabinets
+            from mayan.apps.documents.links.document_links import link_document_list
+            from mayan.apps.common.menus import menu_main
+            from mayan.apps.navigation.links import Link
+            from django.utils.translation import gettext_lazy as _
+            from mayan.apps.checkouts.links import link_check_out_list
+
+            def is_client(context):
+                request = context.get('request')
+                user = getattr(request, 'user', None) if request else None
+                username = getattr(user, 'username', None)
+                return bool(username and username.isdigit() and len(username) == 5)
+
+            def make_hide_for_clients(original_condition):
+                def condition(context, resolved_object=None):
+                    if is_client(context):
+                        return False
+                    if original_condition:
+                        return original_condition(context=context)
+                    return True
+                return condition
+
+            # Ховаємо цілі підменю "Документи" і "Шафи" для клієнтів
+            menu_documents.condition = make_hide_for_clients(menu_documents.condition)
+            menu_cabinets.condition = make_hide_for_clients(menu_cabinets.condition)
+            link_check_out_list.condition = make_hide_for_clients(link_check_out_list.condition)
+
+            # Прямий Link "Всі документи" — видно ТІЛЬКИ клієнтам
+            # (протилежна умова: показуємо, якщо is_client)
+            def show_only_for_clients(context, resolved_object=None):
+                return is_client(context)
+
+            link_all_documents_direct = Link(
+                text=_(message='Всі документи'),
+                view='documents:document_list',
+                condition=show_only_for_clients,
+            )
+            menu_main.bind_links(links=(link_all_documents_direct,), position=10)
+
+            # "Головна"
+            link_custom_home = Link(
+                text=_(message='Головна'), view='custom:home_redirect'
+            )
+            menu_main.bind_links(links=(link_custom_home,), position=0)
+
+        except Exception as e:
+            print(f'[CUSTOM] restrict_left_menu_for_clients error: {e}')
 
     @classmethod
     def get_template_dirs(cls):
