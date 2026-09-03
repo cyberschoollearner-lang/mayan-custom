@@ -1,0 +1,261 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"Report-Msgid-Bugs-To: \n"
+"PO-Revision-Date: 2026-02-25 20:34+0000\n"
+"Last-Translator: Leo Lado, 2026\n"
+"Language-Team: Ukrainian (Ukraine) (https://app.transifex.com/rosarior/teams/"
+"13584/uk_UA/)\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: uk_UA\n"
+"Plural-Forms: nplurals=4; plural=(n % 1 == 0 && n % 10 == 1 && n % 100 != "
+"11 ? 0 : n % 1 == 0 && n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % "
+"100 > 14) ? 1 : n % 1 == 0 && (n % 10 ==0 || (n % 10 >=5 && n % 10 <=9) || "
+"(n % 100 >=11 && n % 100 <=14 )) ? 2: 3);\n"
+
+msgid "%(count)d document added to cabinets successfully."
+msgstr "%(count)d документ успішно додано до комірок."
+
+msgid "%(count)d document removed from cabinets successfully."
+msgstr "%(count)d документ успішно видалено зі комірок."
+
+msgid "%(count)d documents added to cabinets successfully."
+msgstr "%(count)d документи успішно додано до комірок."
+
+msgid "%(count)d documents removed from cabinets successfully."
+msgstr "%(count)d документи успішно видалено з комірок."
+
+msgid "%(model_name)s with this %(field_labels)s already exists."
+msgstr "%(model_name)sз цим %(field_labels)s уже існує."
+
+msgid "A short text used to identify the cabinet."
+msgstr "Короткий текст, який використовується для ідентифікації комірки."
+
+msgid "Add %(count)d document to cabinets."
+msgstr "Додайте документ %(count)d до комірок."
+
+msgid "Add %(count)d documents to cabinets."
+msgstr "Додати документи %(count)d до комірок."
+
+msgid "Add document \"%(object)s\" to cabinets."
+msgstr "Додайте документ \"%(object)s\" до комірок."
+
+msgid "Add documents to cabinets"
+msgstr "Додати документи до комірок"
+
+msgid "Add new level"
+msgstr "Додати новий рівень"
+
+msgid "Add new level to: %s"
+msgstr "Додати новий рівень до: %s"
+
+msgid "Add to cabinets"
+msgstr "Додати до комірок"
+
+msgid "All"
+msgstr "Все"
+
+msgid "Cabinet"
+msgstr "Комірка"
+
+msgid "Cabinet created"
+msgstr "Комірку створено"
+
+msgid "Cabinet deleted"
+msgstr "Комірку видалено"
+
+msgid "Cabinet edited"
+msgstr "Комірку відредаговано"
+
+msgid ""
+"Cabinet levels can contain documents or other cabinet sub levels. To add "
+"documents to a cabinet, select the cabinet view of a document view."
+msgstr ""
+"Рівні кабінету можуть містити документи або інші підрівні кабінету. Щоб "
+"додати документи до кабінету, виберіть режим перегляду документа."
+
+msgid "Cabinets"
+msgstr "Комірки"
+
+msgid ""
+"Cabinets are a multi-level method to organize documents. Each cabinet can "
+"contain documents as well as other sub level cabinets."
+msgstr ""
+"Комірки – це багаторівневий спосіб організації документів. Кожна комірка може "
+"містити документи, а також інші комірки підрівня."
+
+msgid "Cabinets containing document: %s"
+msgstr "Комірки, що містять документ: %s"
+
+msgid "Cabinets from which the document will be removed"
+msgstr "Комірки, з яких буде вилучено документ"
+
+msgid "Cabinets from which the selected documents will be removed."
+msgstr "Комірки, з яких будуть вилучені вибрані документи."
+
+msgid "Cabinets to which the document will be added."
+msgstr "Комірки, до яких буде додано документ."
+
+msgid "Cabinets to which the selected documents will be added."
+msgstr "Комірки, до яких будуть додані вибрані документи."
+
+msgid "Children"
+msgstr "Дитина"
+
+msgid "Create cabinet"
+msgstr "Створити комірку"
+
+msgid "Create cabinets"
+msgstr "Створити комірки"
+
+msgid "Delete"
+msgstr "Видалити"
+
+msgid "Delete cabinets"
+msgstr "Видалити комірки"
+
+msgid "Delete the cabinet: %s?"
+msgstr "Видалити комірку: %s?"
+
+msgid "Details"
+msgstr "Подробиці"
+
+msgid "Details of cabinet: %s"
+msgstr "Деталі комірки: %s"
+
+msgid "Document \"%(object)s\" added to cabinets successfully."
+msgstr "Документ \"%(object)s\" успішно додано до комірок."
+
+msgid "Document \"%(object)s\" removed from cabinets successfully."
+msgstr "Документ \"%(object)s\" успішно видалено з комірок."
+
+msgid "Document ID"
+msgstr "ID документа"
+
+msgid "Document UUID"
+msgstr "Документ UUID"
+
+msgid "Document added to cabinet"
+msgstr "Документ додано до комірки"
+
+msgid "Document cabinet"
+msgstr "Комірка документів"
+
+msgid "Document cabinets"
+msgstr "Комірки документів"
+
+msgid "Document description"
+msgstr "Опис документа"
+
+msgid "Document file MIME type"
+msgstr "Тип файлу документа MIME"
+
+msgid "Document file checksum"
+msgstr "Контрольна сума файлу документа"
+
+msgid "Document label"
+msgstr "Мітка документа"
+
+msgid "Document removed from cabinet"
+msgstr "Документ вилучено з комірки"
+
+msgid "Document type"
+msgstr "Тип документа"
+
+msgid "Documents"
+msgstr "Документи"
+
+msgid "Documents URL"
+msgstr "URL-адреса документів"
+
+msgid "Documents can be added to many cabinets."
+msgstr "Документи можна додавати до багатьох комірк."
+
+msgid "Edit"
+msgstr "Редагувати"
+
+msgid "Edit cabinet: %s"
+msgstr "Редагувати комірку: %s"
+
+msgid "Edit cabinets"
+msgstr "Редагувати комірки"
+
+msgid "Full path"
+msgstr "Повний шлях"
+
+msgid "Label"
+msgstr "Мітка"
+
+msgid "List of children cabinets."
+msgstr "Список комірок-наслідників."
+
+msgid "Navigation:"
+msgstr "Навігація:"
+
+msgid "No cabinets available"
+msgstr "Немає доступних комірк"
+
+msgid "Parent"
+msgstr "Батько"
+
+msgid "Parent and Label"
+msgstr "Батьківський клас і Мітка"
+
+msgid "Parents URL"
+msgstr "Батьківський URL"
+
+msgid "Primary key of the document to add to the cabinet."
+msgstr ""
+"Первинний ключ \"Primary key\" документа, який потрібно додати до комірки."
+
+msgid "Primary key of the document to remove from the cabinet."
+msgstr "Первинний ключ \"Primary key\" документа для вилучення з комірки."
+
+msgid "Remove %(count)d document from cabinets."
+msgstr "Вилучити документ %(count)d із комірок."
+
+msgid "Remove %(count)d documents from cabinets."
+msgstr "Видалити %(count)d документів із комірок."
+
+msgid "Remove document \"%(object)s\" from cabinets."
+msgstr "Видалити документ \"%(object)s\" із комірк."
+
+msgid "Remove documents from cabinets"
+msgstr "Видалити документи з комірк"
+
+msgid "Remove from cabinets"
+msgstr "Вилучити з комірки"
+
+msgid "Return a list of cabinets containing the document."
+msgstr "Повернути список комірок, що містять документ."
+
+msgid "Select cabinets"
+msgstr "Оберіть комірки"
+
+msgid "The name of this cabinet level appended to the names of its ancestors."
+msgstr "Назва цього рівня кабінету додалася до імен його предків."
+
+msgid "The path to the cabinet including all ancestors."
+msgstr "Шлях до комірки, включаючи всіх предків."
+
+msgid "This cabinet level is empty"
+msgstr "Цей рівень кабінету порожній"
+
+msgid "This document is not in any cabinet"
+msgstr "Цього документа немає ні в одній коміркі"
+
+msgid "URL"
+msgstr "URL"
+
+msgid "URL of the API endpoint showing the list documents inside this cabinet."
+msgstr ""
+"URL кінцевої точки API, що показує список документів всередині цього "
+"кабінету."
+
+msgid "View cabinets"
+msgstr "Переглянути комірки"
+
+msgid "get_cabinets()"
+msgstr "get_cabinets()"
