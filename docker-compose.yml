@@ -73,6 +73,7 @@ x-mayan-container:
     - /opt/mayan/custom/templates/appearance/menus/topbar.html:/opt/mayan-edms/lib/python3.13/site-packages/mayan/apps/appearance_bootstrap/templates/appearance/menus/topbar.html
     - /opt/mayan/settings/local.py:/opt/mayan-edms/lib/python3.13/site-packages/mayan/settings/local.py
     - /opt/mayan/custom/locale/cabinets/uk_UA/LC_MESSAGES/django.mo:/opt/mayan-edms/lib/python3.13/site-packages/mayan/apps/cabinets/locale/uk_UA/LC_MESSAGES/django.mo
+    - /opt/mayan/custom/mayan_init_override/__init__.py:/opt/mayan-edms/lib/python3.13/site-packages/mayan/__init__.py
     #- /opt/mayan/custom/templates:/opt/mayan-edms/lib/python3.13/site-packages/mayan/apps/appearance_bootstrap/templates
     # Optional volumes to access external data like staging or watch folders
     # - /opt/staging_folder:/staging_folder
