@@ -42,17 +42,20 @@ from mayan.apps.acls.models import AccessControlList
 from django.contrib.contenttypes.models import ContentType
 
 # ─── Налаштування ────────────────────────────────────────────────────────────
+# Значення беруться з Mayan SmartSettings (custom/settings.py) — можна
+# змінювати через config.yml (CUSTOM_MAX_RETENTION_YEARS: 7) або через
+# UI: System → Setup → Custom. --retention в CLI має найвищий пріоритет
+# і перекриває обидва джерела для одноразового запуску.
+from custom.settings import (
+    setting_max_retention_years,
+    setting_archive_delete_after_days,
+)
 
-# Максимальний строк зберігання в роках
-MAX_RETENTION_YEARS = int(os.getenv('MAX_RETENTION_YEARS', '5'))
-
-# Затримка перед видаленням архіву (днів)
-ARCHIVE_DELETE_AFTER_DAYS = int(os.getenv('ARCHIVE_DELETE_AFTER_DAYS', '30'))
+MAX_RETENTION_YEARS = setting_max_retention_years.value
+ARCHIVE_DELETE_AFTER_DAYS = setting_archive_delete_after_days.value
 
 CURRENT_YEAR = datetime.now().year
-MIN_YEAR     = CURRENT_YEAR - MAX_RETENTION_YEARS  # наприклад 2026-5=2021
-
-doc_ct = ContentType.objects.get_for_model(Document)
+MIN_YEAR     = CURRENT_YEAR - MAX_RETENTION_YEARS
 
 # ─── Лічильники ──────────────────────────────────────────────────────────────
 counter = {

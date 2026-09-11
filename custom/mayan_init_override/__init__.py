@@ -1,0 +1,12 @@
+__title__ = 'На базі - Mayan EDMS'
+__version__ = '4.11.4'
+__build__ = 0x041104
+__build_string__ = 'v4.11.4_Fri May 1 13:58:18 2026 -0400'
+__django_version__ = '5.2'
+__author__ = '© 2026 Insidden'
+__author_email__ = 'admin@voice.kiv.ua'
+__description__ = 'Медичний архів — на базі Mayan EDMS'
+__license__ = 'GPL 2.0'
+__copyright_short__ = '2026'
+__copyright__ = '{} {}'.format('GPL 2.0', __copyright_short__)
+__website__ = ''

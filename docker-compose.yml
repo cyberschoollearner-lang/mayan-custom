@@ -42,6 +42,7 @@ x-mayan-environment:
   MAYAN_LOCK_MANAGER_BACKEND_ARGUMENTS: "{'redis_url':'redis://:${MAYAN_REDIS_PASSWORD:-mayanredispassword}@${MAYAN_DOCKER_REDIS_HOSTNAME:-redis}:${MAYAN_DOCKER_REDIS_PORT:-6379}/${MAYAN_REDIS_LOCK_MANAGER_DATABASE:-2}'}"
   MAYAN_COMMON_EXTRA_APPS: "['custom.apps.CustomConfig']"
   MAYAN_AUTHENTICATION_BACKEND: "mayan.apps.authentication_otp.authentication_backends.AuthenticationBackendModelUsernamePasswordTOTP"
+  MAYAN_DJANGO_CSRF_TRUSTED_ORIGINS: "https://kt.insidden.com,http://localhost:8000,http://172.16.0.253"
 
 x-mayan-container:
   &mayan-container
@@ -71,6 +72,8 @@ x-mayan-container:
     - /mnt/cephfs/mayan/login_bg.jpg:/opt/mayan-edms/static/authentication/images/login-top.jpg
     - /opt/mayan/custom/templates/appearance/menus/topbar.html:/opt/mayan-edms/lib/python3.13/site-packages/mayan/apps/appearance_bootstrap/templates/appearance/menus/topbar.html
     - /opt/mayan/settings/local.py:/opt/mayan-edms/lib/python3.13/site-packages/mayan/settings/local.py
+    - /opt/mayan/custom/locale/cabinets/uk_UA/LC_MESSAGES/django.mo:/opt/mayan-edms/lib/python3.13/site-packages/mayan/apps/cabinets/locale/uk_UA/LC_MESSAGES/django.mo
+    - /opt/mayan/custom/mayan_init_override/__init__.py:/opt/mayan-edms/lib/python3.13/site-packages/mayan/__init__.py
     #- /opt/mayan/custom/templates:/opt/mayan-edms/lib/python3.13/site-packages/mayan/apps/appearance_bootstrap/templates
     # Optional volumes to access external data like staging or watch folders
     # - /opt/staging_folder:/staging_folder
@@ -200,7 +203,7 @@ services:
     profiles:
       - postgresql
     restart: unless-stopped
-    shm_size: 128m
+    shm_size: 1024m
     volumes:
       - ${MAYAN_POSTGRESQL_VOLUME:-postgres}:/var/lib/postgresql/data
       - ${MAYAN_POSTGRESQL_VOLUME_INITDB:-postgres-initdb}:/docker-entrypoint-initdb.d/
